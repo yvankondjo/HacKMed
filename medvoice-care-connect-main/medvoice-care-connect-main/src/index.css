@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 216 25% 97%;
+    --foreground: 212 40% 16%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 212 40% 16%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 212 40% 16%;
+
+    --primary: 207 100% 39%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 207 70% 95%;
+    --secondary-foreground: 207 100% 39%;
+
+    --muted: 214 20% 95%;
+    --muted-foreground: 213 14% 48%;
+
+    --accent: 207 70% 95%;
+    --accent-foreground: 207 100% 39%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 20% 89%;
+    --input: 215 20% 80%;
+    --ring: 207 100% 39%;
+
+    --radius: 0.625rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 213 14% 48%;
+    --sidebar-primary: 207 100% 39%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 207 70% 95%;
+    --sidebar-accent-foreground: 207 100% 39%;
+    --sidebar-border: 214 20% 91%;
+    --sidebar-ring: 207 100% 39%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --success: 152 55% 45%;
+    --success-foreground: 0 0% 100%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
