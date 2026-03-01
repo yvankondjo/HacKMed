@@ -11,7 +11,6 @@ from pathlib import Path
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone as dt_timezone
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -24,15 +23,13 @@ load_dotenv()
 
 REQUIRED_ENV = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
 BACKEND_API_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+TEST_BOOKING_PHONE = (os.getenv("TELEPHONY_TEST_BOOKING_PHONE") or "+33765540003").strip()
 DEFAULT_TELEPHONY_WELCOME = (
-    "Hello, welcome to MedVoice Care Connect. "
-    "I can help schedule your consultation today. "
-    "Are you already a patient with us, or is this your first visit?"
+    "Hello, welcome to Dr John cabinet How can i help you."
 )
 logger = logging.getLogger("medvoice.telephony")
 CALL_TRANSCRIPTS: dict[str, list[dict[str, str]]] = defaultdict(list)
 CALL_STARTED_AT: dict[str, str] = {}
-CALL_PATIENT_CONTEXT: dict[str, dict[str, object]] = {}
 
 
 def configure_logging() -> None:
@@ -82,21 +79,6 @@ def infer_email(patient_phone: str, provided_email: str | None) -> str:
     if provided_email and "@" in provided_email:
         return provided_email.strip().lower()
     return f"patient_{normalize_phone_digits(patient_phone)}@medvoice.local"
-
-
-def phone_lookup_candidates(phone: str) -> list[str]:
-    raw_phone = (phone or "").strip()
-    if not raw_phone:
-        return []
-    digits = normalize_phone_digits(raw_phone)
-
-    candidates: list[str] = []
-    for candidate in (raw_phone, f"+{digits}" if digits != "unknown" else "", digits):
-        cleaned = candidate.strip()
-        if cleaned and cleaned not in candidates:
-            candidates.append(cleaned)
-    return candidates
-
 
 def compact_str_list(value: object, *, limit: int = 6) -> list[str]:
     if not isinstance(value, list):
@@ -193,8 +175,7 @@ def load_agent_prompt() -> str:
 
 
 def load_welcome_message() -> str:
-    value = (os.getenv("TELEPHONY_WELCOME_MESSAGE") or "").strip()
-    return value or DEFAULT_TELEPHONY_WELCOME
+    return  DEFAULT_TELEPHONY_WELCOME
 
 
 def build_stt():
@@ -207,14 +188,7 @@ def build_stt():
             configured_domain,
         )
     operating_point = (os.getenv("STT_OPERATING_POINT", "enhanced") or "").strip().lower()
-    max_delay_raw = read_float_env("STT_MAX_DELAY", 0.7)
-    max_delay = min(4.0, max(0.7, max_delay_raw))
-    if max_delay != max_delay_raw:
-        logger.warning(
-            "STT_MAX_DELAY=%s is outside Speechmatics allowed range [0.7, 4.0]; clamped to %s.",
-            max_delay_raw,
-            max_delay,
-        )
+    max_delay = read_float_env("STT_MAX_DELAY", 0.7)
     silence_trigger = read_float_env("STT_EOU_SILENCE", 0.35)
 
     # Speechmatics plugin argument names can vary across SDK versions.
@@ -243,7 +217,7 @@ def build_stt():
         for kwargs in attempts:
             try:
                 return speechmatics.STT(**kwargs)
-            except (TypeError, ValueError):
+            except TypeError:
                 continue
 
     logger.warning(
@@ -293,127 +267,6 @@ def build_tts():
 class VoiceAssistant(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=load_agent_prompt())
-
-    @function_tool()
-    async def load_patient_context_by_phone(
-        self,
-        context: RunContext,
-        patient_phone: str,
-    ) -> str:
-        """Load patient context by phone and prepare identity confirmation."""
-        room_name = _extract_room_name(context)
-        candidates = phone_lookup_candidates(patient_phone)
-        if not candidates:
-            CALL_PATIENT_CONTEXT.pop(room_name, None)
-            return json.dumps(
-                {
-                    "found": False,
-                    "reason": "invalid_phone",
-                    "message": "No valid phone number provided. Continue as new patient.",
-                },
-                ensure_ascii=True,
-            )
-
-        payload: dict | None = None
-        matched_phone: str | None = None
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                for candidate in candidates:
-                    response = await client.get(
-                        f"{BACKEND_API_BASE_URL}/api/dashboard/patients/{quote(candidate, safe='')}"
-                    )
-                    if response.status_code == 404:
-                        continue
-                    if response.status_code >= 400:
-                        return json.dumps(
-                            {
-                                "found": False,
-                                "reason": "history_unavailable",
-                                "message": "Patient history is unavailable right now. Continue intake without history.",
-                            },
-                            ensure_ascii=True,
-                        )
-                    payload = response.json()
-                    matched_phone = candidate
-                    break
-        except Exception as exc:  # pragma: no cover
-            logger.warning("Patient context lookup failed for %s: %s", patient_phone, exc)
-            return json.dumps(
-                {
-                    "found": False,
-                    "reason": "history_unavailable",
-                    "message": "Patient history is unavailable right now. Continue intake without history.",
-                },
-                ensure_ascii=True,
-            )
-
-        if not payload:
-            CALL_PATIENT_CONTEXT.pop(room_name, None)
-            return json.dumps(
-                {
-                    "found": False,
-                    "reason": "not_found",
-                    "message": "No existing patient profile found for this phone. Continue as first visit.",
-                },
-                ensure_ascii=True,
-            )
-
-        patient = payload.get("patient") or {}
-        appointments = payload.get("appointments") or []
-        calls = payload.get("calls") or []
-        first_name = str(patient.get("firstName") or "").strip()
-        last_name = str(patient.get("lastName") or "").strip()
-        patient_name = f"{first_name} {last_name}".strip() or "this patient"
-        allergies = compact_str_list(patient.get("allergies"))
-        conditions = compact_str_list(patient.get("antecedents"))
-        context_profile = {
-            "patient_id": str(patient.get("id") or matched_phone or patient_phone),
-            "phone": str(patient.get("phone") or matched_phone or patient_phone),
-            "name": patient_name,
-            "allergies": allergies,
-            "conditions": conditions,
-            "last_appointment_date": patient.get("lastAppointmentDate"),
-            "last_appointment_motif": patient.get("lastAppointmentMotif"),
-            "upcoming_count": int(patient.get("upcomingAppointmentsCount") or 0),
-        }
-        CALL_PATIENT_CONTEXT[room_name] = context_profile
-
-        appointment_hints = [
-            {
-                "date": item.get("date"),
-                "motif": item.get("motif"),
-                "doctor": item.get("doctor"),
-            }
-            for item in appointments[:3]
-        ]
-        call_hints = [
-            {
-                "date": item.get("date"),
-                "motif": item.get("motif"),
-                "summary": str(item.get("summary") or "")[:140],
-            }
-            for item in calls[:3]
-        ]
-        return json.dumps(
-            {
-                "found": True,
-                "matchedPhone": matched_phone or patient_phone,
-                "patientName": patient_name,
-                "patientId": context_profile["patient_id"],
-                "identityConfirmationRequired": True,
-                "identityConfirmationQuestion": (
-                    f"I found a profile for {patient_name}. Can you confirm this is you?"
-                ),
-                "knownAllergies": allergies,
-                "knownConditions": conditions,
-                "lastAppointmentDate": context_profile["last_appointment_date"],
-                "lastAppointmentMotif": context_profile["last_appointment_motif"],
-                "upcomingAppointmentsCount": context_profile["upcoming_count"],
-                "recentAppointments": appointment_hints,
-                "recentCalls": call_hints,
-            },
-            ensure_ascii=True,
-        )
 
     @function_tool()
     async def propose_consultation_slots(
@@ -493,7 +346,7 @@ class VoiceAssistant(Agent):
         self,
         context: RunContext,
         patient_name: str,
-        patient_phone: str,
+        patient_phone: str | None = None,
         patient_id: str | None = None,
         patient_email: str | None = None,
         reason: str = "General medical consultation",
@@ -506,18 +359,24 @@ class VoiceAssistant(Agent):
     ) -> str:
         """Create booking in Cal.com, send SMS confirmation, and persist call medical context."""
         room_name = _extract_room_name(context)
-        known_context = CALL_PATIENT_CONTEXT.get(room_name, {})
         transcript = _build_transcript_payload(room_name)
+        clean_name = (patient_name or "").strip()
+        if not clean_name:
+            return (
+                "Booking was not executed because patient full name is missing. "
+                "Please ask the caller full name, confirm it, then retry booking."
+            )
         requested_slot = (starts_at_iso or "").strip()
         if not requested_slot:
             return (
                 "Booking was not executed because no specific slot was selected. "
                 "Please offer schedule options, ask the patient to choose one, and confirm before booking."
             )
-        effective_patient_id = (patient_id or "").strip() or str(known_context.get("patient_id") or "")
+        forced_phone = TEST_BOOKING_PHONE
+        effective_patient_id = (patient_id or "").strip()
         if not effective_patient_id:
-            effective_patient_id = infer_patient_id(patient_phone)
-        effective_email = infer_email(patient_phone, patient_email)
+            effective_patient_id = infer_patient_id(forced_phone)
+        effective_email = infer_email(forced_phone, patient_email)
         effective_starts = requested_slot
         parsed_start = parse_iso_datetime(effective_starts)
         if not parsed_start:
@@ -530,13 +389,13 @@ class VoiceAssistant(Agent):
                 "Booking was not executed because the selected date/time is in the past. "
                 "Please ask the patient to choose a later slot."
             )
-        effective_conditions = conditions if conditions is not None else compact_str_list(known_context.get("conditions"))
-        effective_allergies = allergies if allergies is not None else compact_str_list(known_context.get("allergies"))
+        effective_conditions = compact_str_list(conditions or [])
+        effective_allergies = compact_str_list(allergies or [])
 
         payload = {
             "patientId": effective_patient_id,
-            "patientName": patient_name,
-            "patientPhone": patient_phone,
+            "patientName": clean_name,
+            "patientPhone": forced_phone,
             "patientEmail": effective_email,
             "reason": reason,
             "startsAt": effective_starts,
@@ -558,13 +417,12 @@ class VoiceAssistant(Agent):
                     return booking_failure_message(response.status_code, response.text)
                 else:
                     body = response.json()
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  
             return f"Booking failed: {exc}"
         finally:
             if room_name in CALL_TRANSCRIPTS:
                 CALL_TRANSCRIPTS.pop(room_name, None)
             CALL_STARTED_AT.pop(room_name, None)
-            CALL_PATIENT_CONTEXT.pop(room_name, None)
 
         appointment_id = body.get("appointmentId", "unknown")
         sms_status = body.get("smsStatus", "unknown")
@@ -635,7 +493,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
     room_name = ctx.room.name if ctx.room and ctx.room.name else "unknown-room"
     CALL_TRANSCRIPTS.pop(room_name, None)
-    CALL_PATIENT_CONTEXT.pop(room_name, None)
     CALL_STARTED_AT[room_name] = utc_now_iso()
 
     session = AgentSession(

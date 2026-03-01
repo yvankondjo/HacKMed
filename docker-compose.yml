@@ -12,19 +12,19 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
-  # telephony-agent:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   env_file:
-  #     - ./backend/.env
-  #   environment:
-  #     BACKEND_API_BASE_URL: http://backend:8000
-  #     PYTHONUNBUFFERED: "1"
-  #   command: python agents/telephony_agent.py start
-  #   depends_on:
-  #     - backend
-  #   restart: unless-stopped
+  telephony-agent:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      BACKEND_API_BASE_URL: http://backend:8000
+      PYTHONUNBUFFERED: "1"
+    command: python agents/telephony_agent.py start
+    depends_on:
+      - backend
+    restart: unless-stopped
 
   consultation-agent:
     build:
@@ -41,19 +41,19 @@ services:
       - backend
     restart: unless-stopped
 
-  # outbound-caller:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   env_file:
-  #     - ./backend/.env
-  #   environment:
-  #     BACKEND_API_BASE_URL: http://backend:8000
-  #     PYTHONUNBUFFERED: "1"
-  #   command: python agents/outbound_caller.py start
-  #   depends_on:
-  #     - backend
-  #   restart: unless-stopped
+  outbound-caller:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      BACKEND_API_BASE_URL: http://backend:8000
+      PYTHONUNBUFFERED: "1"
+    command: python agents/outbound_caller.py start
+    depends_on:
+      - backend
+    restart: unless-stopped
 
   frontend:
     build:
