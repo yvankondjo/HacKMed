@@ -48,10 +48,51 @@ class EndConsultationRequest(BaseModel):
     appointmentId: str
 
 
+class FollowupCallRequest(BaseModel):
+    appointmentId: str
+    patientId: str
+    patientName: str
+    patientPhone: str | None = None
+    doctorName: str | None = None
+    nextAppointmentAt: str | None = None
+    medications: list["Medication"] = Field(default_factory=list)
+    additionalAdvice: list[str] = Field(default_factory=list)
+    conversationSummary: str | None = None
+
+
+class FollowupCallResponse(BaseModel):
+    followupCallId: str
+    status: Literal["queued", "failed", "mock", "completed"]
+    dialTo: str
+    provider: str
+    dispatchId: str | None = None
+    roomName: str | None = None
+    dispatchDetail: str | None = None
+    followupTaskId: str | None = None
+    confirmationMessage: str
+    updatedAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class FollowupCallCompleteRequest(BaseModel):
+    followupCallId: str
+    appointmentId: str | None = None
+    patientId: str
+    patientPhone: str | None = None
+    status: Literal["completed", "failed", "no-answer", "voicemail"] = "completed"
+    durationSeconds: int = 0
+    summary: str = ""
+    symptoms: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    evolution: Literal["improvement", "worsening", "stable", "unknown"] = "unknown"
+    transcript: list[TranscriptMessageInput] = Field(default_factory=list)
+    followupTaskId: str | None = None
+
+
 class ConsultationSummaryRequest(BaseModel):
     appointmentId: str
     patientId: str
     transcript: list[TranscriptMessageInput] = Field(default_factory=list)
+    soap: dict = Field(default_factory=dict)
 
 
 class Medication(BaseModel):
@@ -66,6 +107,7 @@ class ConsultationSummaryResponse(BaseModel):
     detectedSymptoms: list[str]
     diagnoses: list[str]
     prescription: dict
+    contextSignals: list[str] = Field(default_factory=list)
 
 
 class SuggestQuestionsRequest(BaseModel):
@@ -128,6 +170,14 @@ class ConsultationSessionState(BaseModel):
     transcriptCount: int = 0
     latestSuggestedQuestions: list[str] = Field(default_factory=list)
     latestRedFlags: list[str] = Field(default_factory=list)
+
+
+class ConsultationRoomTokenResponse(BaseModel):
+    token: str
+    url: str
+    roomName: str
+    participantIdentity: str
+    participantName: str
 
 
 class DashboardAppointment(BaseModel):

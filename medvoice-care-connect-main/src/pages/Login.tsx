@@ -16,14 +16,14 @@ export default function Login() {
     e.preventDefault();
     setError("");
     if (!phone.trim()) {
-      setError("Veuillez saisir votre numéro.");
+      setError("Please enter your phone number.");
       return;
     }
     const success = login(phone);
     if (success) {
       navigate("/");
     } else {
-      setError("Numéro invalide.");
+      setError("Invalid phone number.");
     }
   };
 
@@ -47,7 +47,7 @@ export default function Login() {
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="phone" className="text-[11px] text-muted-foreground uppercase tracking-wider font-normal">Numéro de téléphone</Label>
+            <Label htmlFor="phone" className="text-[11px] text-muted-foreground uppercase tracking-wider font-normal">Phone number</Label>
             <Input
               id="phone"
               type="tel"
@@ -61,12 +61,12 @@ export default function Login() {
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <Button type="submit" className="w-full h-11 font-medium">
-            Se connecter
+            Sign in
           </Button>
 
           <div className="text-[11px] text-center text-muted-foreground space-y-1 pt-3">
-            <p>POC user unique</p>
-            <p className="text-[10px] text-muted-foreground/60 mt-1.5">Entrer simplement un numéro de téléphone</p>
+            <p>Single POC user</p>
+            <p className="text-[10px] text-muted-foreground/60 mt-1.5">Just enter a phone number</p>
           </div>
         </form>
       </div>

@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { User, Droplets, AlertTriangle, Calendar } from "lucide-react";
 import { format, differenceInYears, parseISO } from "date-fns";
-import { fr } from "date-fns/locale";
+import { enUS } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
 import { fetchDashboardPatients, type DashboardPatientRecord } from "@/services/careDataApi";
 
@@ -33,10 +33,10 @@ export default function Patients() {
   const computeAge = (patient: Patient): string => {
     try {
       const age = differenceInYears(new Date(), parseISO(patient.dateOfBirth));
-      if (!Number.isFinite(age)) return "Âge inconnu";
-      return `${age} ans`;
+      if (!Number.isFinite(age)) return "Unknown age";
+      return `${age} years`;
     } catch {
-      return "Âge inconnu";
+      return "Unknown age";
     }
   };
 
@@ -46,7 +46,7 @@ export default function Patients() {
 
       <div className="grid gap-4">
         {!loading && patients.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center py-12">Aucun patient trouvé.</p>
+          <p className="text-sm text-muted-foreground text-center py-12">No patients found.</p>
         )}
         {patients.map((p) => {
           const lastAppointmentDate = p.lastAppointmentDate;
@@ -97,7 +97,7 @@ export default function Patients() {
                   <div className="flex items-start gap-2">
                     <Calendar className="h-4 w-4 text-muted-foreground mt-0.5" />
                     <p className="text-sm text-muted-foreground">
-                      Dernier RDV : {format(parseISO(lastAppointmentDate), "d MMM yyyy", { locale: fr })} — {lastAppointmentMotif || "Consultation"}
+                      Last appointment: {format(parseISO(lastAppointmentDate), "d MMM yyyy", { locale: enUS })} - {lastAppointmentMotif || "Consultation"}
                     </p>
                   </div>
                 )}

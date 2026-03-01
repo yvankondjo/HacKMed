@@ -9,17 +9,17 @@ const statusStyles = {
   done: {
     dot: "bg-success",
     badge: "bg-success/10 text-success border-success/20",
-    label: "Termine",
+    label: "Done",
   },
   active: {
     dot: "bg-primary animate-pulse",
     badge: "bg-primary/10 text-primary border-primary/20",
-    label: "En cours",
+    label: "In progress",
   },
   next: {
     dot: "bg-muted-foreground/40",
     badge: "bg-muted text-muted-foreground border-border",
-    label: "A venir",
+    label: "Upcoming",
   },
 } as const;
 
@@ -38,7 +38,7 @@ export default function ProductLifecycle() {
         <Card>
           <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-muted-foreground">Etapes lifecycle</p>
+              <p className="text-xs text-muted-foreground">Lifecycle stages</p>
               <p className="text-2xl font-semibold">{stages.length}</p>
             </div>
             <Timer className="h-5 w-5 text-primary" />
@@ -47,7 +47,7 @@ export default function ProductLifecycle() {
         <Card>
           <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-muted-foreground">Impacts table/events</p>
+              <p className="text-xs text-muted-foreground">Table/event impacts</p>
               <p className="text-2xl font-semibold">{totalTableEvents}</p>
             </div>
             <Database className="h-5 w-5 text-primary" />
@@ -56,8 +56,8 @@ export default function ProductLifecycle() {
         <Card>
           <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-xs text-muted-foreground">Canal primaire</p>
-              <p className="text-2xl font-semibold">Voix + SMS</p>
+              <p className="text-xs text-muted-foreground">Primary channel</p>
+              <p className="text-2xl font-semibold">Voice + SMS</p>
             </div>
             <PhoneCall className="h-5 w-5 text-primary" />
           </CardContent>
@@ -66,14 +66,14 @@ export default function ProductLifecycle() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-xl">Lifecycle produit patient</CardTitle>
+          <CardTitle className="text-xl">Patient product lifecycle</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Tables creees/impactees a chaque etape du parcours.
+            Tables created/updated at each stage of the care journey.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           {isLoading && (
-            <div className="text-sm text-muted-foreground">Chargement des etapes...</div>
+            <div className="text-sm text-muted-foreground">Loading stages...</div>
           )}
           {stages.map((stage, index) => {
             const status = statusStyles[stage.status];

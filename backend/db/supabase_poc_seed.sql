@@ -176,9 +176,9 @@ SET state = EXCLUDED.state,
 
 INSERT INTO transcript_messages (consultation_id, sender_type, content, sent_at)
 VALUES
-  ('50000000-0000-0000-0000-000000000001', 'patient', 'J''ai mal a la gorge depuis 3 jours.', now() - interval '59 minutes'),
-  ('50000000-0000-0000-0000-000000000001', 'doctor', 'Avez-vous eu de la fievre ?', now() - interval '58 minutes'),
-  ('50000000-0000-0000-0000-000000000001', 'patient', 'Oui, autour de 38.5 hier soir.', now() - interval '57 minutes')
+  ('50000000-0000-0000-0000-000000000001', 'patient', 'I have had a sore throat for 3 days.', now() - interval '59 minutes'),
+  ('50000000-0000-0000-0000-000000000001', 'doctor', 'Have you had a fever?', now() - interval '58 minutes'),
+  ('50000000-0000-0000-0000-000000000001', 'patient', 'Yes, around 38.5 last night.', now() - interval '57 minutes')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO ai_summaries (appointment_id, consultation_id, type, summary_text, probable_diagnosis, urgency_score)
@@ -275,7 +275,7 @@ VALUES
     '30000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000001',
     'booking_confirmation',
-    'Votre rendez-vous est confirme.',
+    'Your appointment is confirmed.',
     'sent',
     now() - interval '2 day'
   ),
@@ -283,7 +283,7 @@ VALUES
     '30000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000001',
     'prescription',
-    'Votre ordonnance est disponible.',
+    'Your prescription is available.',
     'sent',
     now() - interval '20 minutes'
   )

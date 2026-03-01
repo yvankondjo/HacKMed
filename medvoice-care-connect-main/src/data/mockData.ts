@@ -62,12 +62,6 @@ export interface Prescription {
   additionalAdvice: string[];
 }
 
-export interface TranscriptMessage {
-  role: "doctor" | "patient";
-  text: string;
-  timestamp?: string;
-}
-
 export interface PastAppointment {
   date: string;
   motif: string;
@@ -86,12 +80,12 @@ export const patients: Patient[] = [
     phone: "06 12 34 56 78",
     email: "marie.dupont@email.com",
     bloodType: "A+",
-    allergies: ["Pénicilline", "Arachides"],
+    allergies: ["Penicillin", "Peanuts"],
     antecedents: [
-      "Hypertension artérielle (depuis 2019)",
-      "Appendicectomie (2005)",
-      "Fracture poignet droit (2012)",
-      "Antécédents familiaux : diabète type 2 (père)",
+      "Hypertension (since 2019)",
+      "Appendectomy (2005)",
+      "Right wrist fracture (2012)",
+      "Family history: type 2 diabetes (father)",
     ],
   },
   {
@@ -102,8 +96,8 @@ export const patients: Patient[] = [
     phone: "06 98 76 54 32",
     email: "jean.martin@email.com",
     bloodType: "O-",
-    allergies: ["Aspirine"],
-    antecedents: ["Asthme chronique (depuis 2010)", "Entorse cheville gauche (2018)"],
+    allergies: ["Aspirin"],
+    antecedents: ["Chronic asthma (since 2010)", "Left ankle sprain (2018)"],
   },
   {
     id: "3",
@@ -114,7 +108,7 @@ export const patients: Patient[] = [
     email: "sophie.bernard@email.com",
     bloodType: "B+",
     allergies: [],
-    antecedents: ["Migraine chronique (depuis 2020)"],
+    antecedents: ["Chronic migraine (since 2020)"],
   },
 ];
 
@@ -130,11 +124,11 @@ export const appointments: Appointment[] = [
     date: today,
     time: "09:00",
     doctor: "Dr. Laurent Martin",
-    doctorSpecialty: "Médecin généraliste",
-    motif: "Suivi tensions artérielles",
+    doctorSpecialty: "General practitioner",
+    motif: "Blood pressure follow-up",
     status: "done",
     aiSummary:
-      "La patiente a appelé pour un suivi de sa tension artérielle. Elle mentionne des vertiges matinaux depuis 1 semaine. L'agent a recommandé de maintenir le traitement actuel et de venir avec ses relevés tensionnels des 2 dernières semaines.",
+      "The patient called for blood pressure follow-up. She reports morning dizziness for one week. The agent advised continuing current treatment and bringing blood pressure readings from the past two weeks.",
   },
   {
     id: "2",
@@ -143,11 +137,11 @@ export const appointments: Appointment[] = [
     date: today,
     time: "10:30",
     doctor: "Dr. Laurent Martin",
-    doctorSpecialty: "Médecin généraliste",
-    motif: "Crise d'asthme récurrente",
+    doctorSpecialty: "General practitioner",
+    motif: "Recurrent asthma flare",
     status: "upcoming",
     aiSummary:
-      "Le patient signale une augmentation de la fréquence des crises d'asthme, surtout la nuit. Il utilise son inhalateur de secours 3-4 fois par semaine au lieu d'une fois. Pas de modification récente de l'environnement.",
+      "The patient reports more frequent asthma attacks, especially at night. Rescue inhaler use increased to 3-4 times weekly instead of once. No recent environmental changes.",
   },
   {
     id: "3",
@@ -156,11 +150,11 @@ export const appointments: Appointment[] = [
     date: today,
     time: "11:30",
     doctor: "Dr. Laurent Martin",
-    doctorSpecialty: "Médecin généraliste",
-    motif: "Migraines persistantes",
+    doctorSpecialty: "General practitioner",
+    motif: "Persistent migraines",
     status: "upcoming",
     aiSummary:
-      "La patiente souffre de migraines 4 à 5 fois par semaine depuis un mois, avec photophobie et nausées. Le traitement actuel (paracétamol) ne suffit plus. Elle demande un ajustement thérapeutique.",
+      "The patient has migraines 4 to 5 times per week for one month, with photophobia and nausea. Current treatment (paracetamol) is no longer sufficient. She requests a treatment adjustment.",
   },
   {
     id: "4",
@@ -169,11 +163,11 @@ export const appointments: Appointment[] = [
     date: today,
     time: "14:00",
     doctor: "Dr. Laurent Martin",
-    doctorSpecialty: "Médecin généraliste",
-    motif: "Toux persistante",
+    doctorSpecialty: "General practitioner",
+    motif: "Persistent cough",
     status: "upcoming",
     aiSummary:
-      "La patiente tousse depuis 3 semaines. Toux sèche, non productive, sans fièvre. Pas de tabagisme. L'agent a recommandé une consultation pour investigation complémentaire.",
+      "The patient has had a dry, non-productive cough for three weeks without fever. No tobacco use. The agent recommended an in-person consultation for further evaluation.",
   },
   {
     id: "5",
@@ -182,11 +176,11 @@ export const appointments: Appointment[] = [
     date: today,
     time: "15:30",
     doctor: "Dr. Laurent Martin",
-    doctorSpecialty: "Médecin généraliste",
-    motif: "Douleurs lombaires",
+    doctorSpecialty: "General practitioner",
+    motif: "Low back pain",
     status: "upcoming",
     aiSummary:
-      "Le patient décrit des douleurs lombaires basses depuis 2 semaines, irradiant dans la jambe droite. Apparition après un effort de levage. Pas de perte de sensibilité.",
+      "The patient describes lower back pain for two weeks radiating to the right leg. Symptoms started after lifting effort. No sensory loss reported.",
   },
 ];
 
@@ -194,16 +188,16 @@ export const appointments: Appointment[] = [
 
 export const pastAppointments: Record<string, PastAppointment[]> = {
   "1": [
-    { date: "2026-02-15", motif: "Renouvellement ordonnance", doctor: "Dr. Martin", summary: "Renouvellement traitement hypertension. Résultats satisfaisants." },
-    { date: "2026-01-20", motif: "Douleurs thoraciques", doctor: "Dr. Martin", summary: "Bilan cardiaque normal. Stress identifié comme cause probable." },
-    { date: "2025-11-10", motif: "Bilan annuel", doctor: "Dr. Martin", summary: "Bilan sanguin complet. Cholestérol légèrement élevé." },
+    { date: "2026-02-15", motif: "Prescription renewal", doctor: "Dr. Martin", summary: "Hypertension treatment renewed. Stable outcomes." },
+    { date: "2026-01-20", motif: "Chest pain", doctor: "Dr. Martin", summary: "Cardiac workup normal. Stress identified as likely cause." },
+    { date: "2025-11-10", motif: "Annual checkup", doctor: "Dr. Martin", summary: "Complete blood panel performed. Mildly elevated cholesterol." },
   ],
   "2": [
-    { date: "2026-02-01", motif: "Crise d'asthme", doctor: "Dr. Martin", summary: "Crise modérée. Ajustement posologie Ventoline." },
-    { date: "2025-12-15", motif: "Bilan respiratoire", doctor: "Dr. Martin", summary: "EFR satisfaisantes. Maintien traitement de fond." },
+    { date: "2026-02-01", motif: "Asthma flare", doctor: "Dr. Martin", summary: "Moderate flare. Ventoline dosage adjusted." },
+    { date: "2025-12-15", motif: "Respiratory review", doctor: "Dr. Martin", summary: "Pulmonary function tests stable. Maintenance therapy continued." },
   ],
   "3": [
-    { date: "2026-01-28", motif: "Migraines", doctor: "Dr. Martin", summary: "Prescription Sumatriptan. Tenu journal des crises." },
+    { date: "2026-01-28", motif: "Migraine review", doctor: "Dr. Martin", summary: "Sumatriptan prescribed. Attack diary maintained." },
   ],
 };
 
@@ -216,10 +210,10 @@ export const calls: CallRecord[] = [
     appointmentId: "1",
     date: "2026-02-27",
     duration: "8 min",
-    motif: "Prise de RDV — Suivi tensions",
-    symptoms: ["Vertiges matinaux", "Céphalées"],
-    summary: "La patiente a contacté l'assistant pour planifier un suivi de ses tensions artérielles.",
-    recommendations: ["Mesurer la tension matin et soir", "Apporter les relevés au RDV"],
+    motif: "Appointment booking - blood pressure follow-up",
+    symptoms: ["Morning dizziness", "Headache"],
+    summary: "The patient contacted the assistant to schedule blood pressure follow-up.",
+    recommendations: ["Measure blood pressure morning and evening", "Bring readings to the appointment"],
     evolution: "stable",
     urgencyScore: 4,
   },
@@ -229,54 +223,33 @@ export const calls: CallRecord[] = [
     appointmentId: "2",
     date: "2026-02-26",
     duration: "6 min",
-    motif: "Prise de RDV — Asthme",
-    symptoms: ["Dyspnée nocturne", "Sifflements"],
-    summary: "Le patient signale une augmentation des crises d'asthme nocturnes.",
-    recommendations: ["Éviter les allergènes", "Utiliser le peak flow quotidiennement"],
+    motif: "Appointment booking - asthma",
+    symptoms: ["Nocturnal dyspnea", "Wheezing"],
+    summary: "The patient reports increased nocturnal asthma attacks.",
+    recommendations: ["Avoid allergens", "Use peak flow daily"],
     evolution: "worsening",
     urgencyScore: 5,
   },
 ];
 
-// ─── Mock transcript for consultation simulation ───
-
-export const mockTranscriptSteps: TranscriptMessage[] = [
-  { role: "patient", text: "Bonjour docteur, j'ai mal à la gorge depuis 3 jours.", timestamp: "00:00" },
-  { role: "doctor", text: "Bonjour. Pouvez-vous me décrire la douleur ? Est-ce constant ?", timestamp: "00:12" },
-  { role: "patient", text: "Oui, c'est constant et ça empire quand j'avale.", timestamp: "00:25" },
-  { role: "doctor", text: "Avez-vous de la fièvre ?", timestamp: "00:35" },
-  { role: "patient", text: "Oui, autour de 38.5°C hier soir.", timestamp: "00:42" },
-  { role: "doctor", text: "Des ganglions gonflés au niveau du cou ?", timestamp: "00:55" },
-  { role: "patient", text: "Je crois que oui, c'est sensible quand j'appuie.", timestamp: "01:05" },
-  { role: "doctor", text: "Depuis combien de temps exactement ?", timestamp: "01:18" },
-  { role: "patient", text: "Ça a commencé lundi, donc 3 jours.", timestamp: "01:28" },
-  { role: "doctor", text: "D'accord. Je vais vous examiner. Ouvrez la bouche.", timestamp: "01:40" },
-];
-
 export const mockAIPrescription: Prescription = {
   medications: [
-    { name: "Amoxicilline", dosage: "1g", frequency: "3 fois par jour", duration: "6 jours" },
-    { name: "Paracétamol", dosage: "1000mg", frequency: "Toutes les 6h si douleur", duration: "5 jours" },
-    { name: "Hexaspray", dosage: "2 pulvérisations", frequency: "3 fois par jour", duration: "5 jours" },
+    { name: "Amoxicillin", dosage: "1g", frequency: "3 times daily", duration: "6 days" },
+    { name: "Paracetamol", dosage: "1000mg", frequency: "Every 6h as needed for pain", duration: "5 days" },
+    { name: "Hexaspray", dosage: "2 sprays", frequency: "3 times daily", duration: "5 days" },
   ],
   additionalAdvice: [
-    "Repos vocal recommandé",
-    "Hydratation abondante (1.5L/jour minimum)",
-    "Éviter les aliments irritants",
-    "Reconsulter si fièvre persiste au-delà de 48h",
+    "Voice rest is recommended",
+    "Maintain good hydration (at least 1.5L/day)",
+    "Avoid irritating foods",
+    "Seek reassessment if fever persists beyond 48 hours",
   ],
 };
 
-export const mockDiagnoses = [
-  "Angine bactérienne (streptocoque probable)",
-  "Pharyngite aiguë",
-  "Infection virale des VAS",
-];
-
 export const notifications: Notification[] = [
-  { id: "1", type: "reminder", message: "RDV avec Marie Dupont dans 30 min", date: today, read: false },
-  { id: "2", type: "alert", message: "Résultat labo Jean Martin disponible", date: today, read: false },
-  { id: "3", type: "document", message: "Ordonnance à signer", date: today, read: true },
+  { id: "1", type: "reminder", message: "Appointment with Marie Dupont in 30 min", date: today, read: false },
+  { id: "2", type: "alert", message: "Jean Martin lab result available", date: today, read: false },
+  { id: "3", type: "document", message: "Prescription ready for signature", date: today, read: true },
 ];
 
 export interface LifecycleTableImpact {
@@ -295,8 +268,8 @@ export interface LifecycleStage {
 export const productLifecycleStages: LifecycleStage[] = [
   {
     id: "patient-call",
-    title: "Patient appelle",
-    description: "Capture du besoin, qualification initiale et creation de rendez-vous.",
+    title: "Patient Call",
+    description: "Need capture, initial triage, and appointment creation.",
     status: "done",
     impactedTables: [
       { table: "users", eventLabel: "lookup/create patient user" },
@@ -309,8 +282,8 @@ export const productLifecycleStages: LifecycleStage[] = [
   },
   {
     id: "day-before-confirmation",
-    title: "Confirmation J-1",
-    description: "Relance patient et validation de presence avant consultation.",
+    title: "Day-Before Confirmation",
+    description: "Patient reminder and attendance confirmation before consultation.",
     status: "done",
     impactedTables: [
       { table: "sms_messages", eventLabel: "insert type=reminder" },
@@ -320,8 +293,8 @@ export const productLifecycleStages: LifecycleStage[] = [
   },
   {
     id: "consultation-start",
-    title: "Consultation demarre",
-    description: "Debut de session clinique avec transcription live et resume progressif.",
+    title: "Consultation Started",
+    description: "Clinical session started with live transcription and progressive summary.",
     status: "active",
     impactedTables: [
       { table: "consultations", eventLabel: "insert state=active, started_at" },
@@ -331,8 +304,8 @@ export const productLifecycleStages: LifecycleStage[] = [
   },
   {
     id: "consultation-end-prescription",
-    title: "Fin consultation + ordonnance",
-    description: "Cloture medicale, generation du compte-rendu et envoi ordonnance.",
+    title: "Consultation End + Prescription",
+    description: "Medical closure, report generation, and prescription delivery.",
     status: "next",
     impactedTables: [
       { table: "ai_summaries", eventLabel: "insert type=final_report" },
@@ -343,8 +316,8 @@ export const productLifecycleStages: LifecycleStage[] = [
   },
   {
     id: "post-consultation-followup",
-    title: "Suivi post-consultation",
-    description: "Automatisation des rappels et monitorage d'evolution.",
+    title: "Post-Consultation Follow-Up",
+    description: "Automated reminders and recovery monitoring.",
     status: "next",
     impactedTables: [
       { table: "followup_tasks", eventLabel: "insert follow-up workflow tasks" },

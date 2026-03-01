@@ -26,6 +26,7 @@ class SmsConfig:
     twilio_account_sid: str | None
     twilio_auth_token: str | None
     twilio_from_number: str | None
+    twilio_messaging_service_sid: str | None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ def load_sms_config() -> SmsConfig:
         twilio_account_sid=_read_env("TWILIO_ACCOUNT_SID"),
         twilio_auth_token=_read_env("TWILIO_AUTH_TOKEN"),
         twilio_from_number=_read_env("TWILIO_FROM_NUMBER"),
+        twilio_messaging_service_sid=_read_env("TWILIO_MESSAGING_SERVICE_SID"),
     )
 
 

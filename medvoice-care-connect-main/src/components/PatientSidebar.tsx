@@ -8,12 +8,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from "@/components/ui/sidebar";
 
 export function PatientSidebar() {
-  const { state } = useSidebar();
-  const collapsed = state === "collapsed";
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -41,7 +38,7 @@ export function PatientSidebar() {
             <SidebarMenuButton asChild>
               <button className="flex items-center gap-3 px-3 py-2 rounded-md bg-secondary text-primary font-medium text-sm w-full border-l-2 border-l-primary">
                 <Calendar className="h-4 w-4 shrink-0" />
-                <span>Mon espace</span>
+                <span>My space</span>
               </button>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -68,7 +65,7 @@ export function PatientSidebar() {
                 className="flex items-center gap-3 px-3 py-2 rounded-md text-muted-foreground hover:text-destructive hover:bg-muted transition-colors w-full text-sm"
               >
                 <LogOut className="h-4 w-4 shrink-0" />
-                <span>Déconnexion</span>
+                <span>Sign out</span>
               </button>
             </SidebarMenuButton>
           </SidebarMenuItem>

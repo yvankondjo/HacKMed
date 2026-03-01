@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { addDays, format, parseISO } from "date-fns";
-import { fr } from "date-fns/locale";
+import { enUS } from "date-fns/locale";
 import { CalendarClock, UserRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,15 +14,15 @@ import {
 
 const statusConfig: Record<Appointment["status"], { label: string; className: string }> = {
   upcoming: {
-    label: "À venir",
+    label: "Upcoming",
     className: "bg-primary/10 text-primary border-primary/20",
   },
   "in-progress": {
-    label: "En cours",
+    label: "In progress",
     className: "bg-warning/10 text-warning border-warning/20",
   },
   done: {
-    label: "Terminé",
+    label: "Completed",
     className: "bg-muted text-muted-foreground border-border",
   },
 };
@@ -86,15 +86,15 @@ export default function Agenda() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Agenda</h1>
-        <p className="text-sm text-muted-foreground mt-1">Rendez-vous à venir (30 prochains jours)</p>
+        <p className="text-sm text-muted-foreground mt-1">Upcoming appointments (next 30 days)</p>
       </div>
 
       {loading && (
-        <p className="text-sm text-muted-foreground">Chargement de l'agenda...</p>
+        <p className="text-sm text-muted-foreground">Loading agenda...</p>
       )}
 
       {!loading && groupedByDate.length === 0 && (
-        <p className="text-sm text-muted-foreground">Aucun rendez-vous planifié.</p>
+        <p className="text-sm text-muted-foreground">No appointments scheduled.</p>
       )}
 
       <div className="space-y-5">
@@ -103,7 +103,7 @@ export default function Agenda() {
             <div className="flex items-center gap-2">
               <CalendarClock className="h-4 w-4 text-primary" />
               <h2 className="font-medium text-foreground">
-                {format(parseISO(date), "EEEE d MMMM yyyy", { locale: fr })}
+                {format(parseISO(date), "EEEE d MMMM yyyy", { locale: enUS })}
               </h2>
             </div>
 

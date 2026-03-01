@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { format, parseISO } from "date-fns";
-import { fr } from "date-fns/locale";
+import { enUS } from "date-fns/locale";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, CalendarClock, Loader2, Phone } from "lucide-react";
+import { ArrowLeft, CalendarClock, Loader2, Phone, PhoneCall } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "sonner";
 import {
   fetchPatientDetail,
   type DashboardPatientDetail,
 } from "@/services/careDataApi";
+import { postReminderFollowupCall } from "@/services/lifecycleApi";
 
 const statusClass: Record<string, string> = {
   upcoming: "bg-primary/10 text-primary border-primary/20",
@@ -22,6 +24,7 @@ export default function PatientDetail() {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<DashboardPatientDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isLaunchingReminder, setIsLaunchingReminder] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -54,11 +57,41 @@ export default function PatientDetail() {
     return Math.floor((Date.now() - birth) / (365.25 * 24 * 60 * 60 * 1000));
   }, [patient?.dateOfBirth]);
 
+  const launchReminderCall = async () => {
+    if (!patient || isLaunchingReminder) return;
+    const latestAppointment = appointments[0];
+    setIsLaunchingReminder(true);
+    try {
+      const payload = {
+        appointmentId: latestAppointment?.id || `followup-${Date.now()}`,
+        patientId: patient.id,
+        patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+        patientPhone: patient.phone || undefined,
+        doctorName: latestAppointment?.doctor || "Dr. Unassigned",
+        nextAppointmentAt: latestAppointment?.startsAt,
+      };
+      const response = await postReminderFollowupCall(payload);
+      if (!response) {
+        toast.error("Failed to launch follow-up call.");
+        return;
+      }
+      if (response.status === "failed") {
+        toast.error(`Dispatch failed: ${response.dispatchDetail || "Unknown reason"}`);
+      } else {
+        toast.success(response.confirmationMessage);
+      }
+      const refreshed = await fetchPatientDetail(patient.id);
+      if (refreshed) setDetail(refreshed);
+    } finally {
+      setIsLaunchingReminder(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 space-y-3">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground">Chargement du dossier patient...</p>
+        <p className="text-sm text-muted-foreground">Loading patient chart...</p>
       </div>
     );
   }
@@ -66,8 +99,8 @@ export default function PatientDetail() {
   if (!patient) {
     return (
       <div className="space-y-4 py-12 text-center">
-        <p className="text-sm text-muted-foreground">Patient introuvable.</p>
-        <Button variant="outline" onClick={() => navigate("/patients")}>Retour</Button>
+        <p className="text-sm text-muted-foreground">Patient not found.</p>
+        <Button variant="outline" onClick={() => navigate("/patients")}>Back</Button>
       </div>
     );
   }
@@ -78,18 +111,41 @@ export default function PatientDetail() {
         onClick={() => navigate("/patients")}
         className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft className="h-4 w-4" /> Retour patients
+        <ArrowLeft className="h-4 w-4" /> Back to patients
       </button>
 
       <Card>
         <CardHeader>
-          <CardTitle>{patient.firstName} {patient.lastName}</CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>{patient.firstName} {patient.lastName}</CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isLaunchingReminder}
+              onClick={() => {
+                void launchReminderCall();
+              }}
+              className="gap-2"
+            >
+              {isLaunchingReminder ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Launching...
+                </>
+              ) : (
+                <>
+                  <PhoneCall className="h-4 w-4" />
+                  Trigger Follow-up Call
+                </>
+              )}
+            </Button>
+          </div>
           <p className="text-sm text-muted-foreground">
-            {age !== null ? `${age} ans` : "Âge inconnu"} · {patient.phone} · {patient.email}
+            {age !== null ? `${age} years` : "Unknown age"} · {patient.phone} · {patient.email}
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">Groupe sanguin: {patient.bloodType || "Unknown"}</p>
+          <p className="text-sm text-muted-foreground">Blood type: {patient.bloodType || "Unknown"}</p>
           <div className="flex flex-wrap gap-2">
             {patient.allergies.length > 0 ? patient.allergies.map((allergy) => (
               <Badge key={allergy} variant="destructive">{allergy}</Badge>
@@ -121,7 +177,7 @@ export default function PatientDetail() {
                 <div>
                   <p className="text-sm font-medium text-foreground">{appointment.motif}</p>
                   <p className="text-xs text-muted-foreground">
-                    {format(parseISO(appointment.date), "dd MMM yyyy", { locale: fr })} · {appointment.time} · {appointment.doctor}
+                    {format(parseISO(appointment.date), "dd MMM yyyy", { locale: enUS })} · {appointment.time} · {appointment.doctor}
                   </p>
                 </div>
                 <Badge variant="outline" className={statusClass[appointment.status] || ""}>{appointment.status}</Badge>
@@ -147,7 +203,7 @@ export default function PatientDetail() {
                 </p>
                 <p className="text-xs text-muted-foreground flex items-center gap-1">
                   <CalendarClock className="h-3.5 w-3.5" />
-                  {format(parseISO(call.date), "dd MMM yyyy", { locale: fr })} · {call.duration}
+                  {format(parseISO(call.date), "dd MMM yyyy", { locale: enUS })} · {call.duration}
                 </p>
               </div>
               {call.summary && <p className="text-sm text-muted-foreground">{call.summary}</p>}

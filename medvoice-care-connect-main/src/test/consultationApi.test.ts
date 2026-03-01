@@ -10,18 +10,18 @@ describe("fetchSuggestedQuestions", () => {
   const payload = {
     appointmentId: "apt-1",
     patientId: "pat-1",
-    transcript: [{ speaker: "Patient" as const, text: "J'ai mal a la gorge", timestamp: "00:10" }],
+    transcript: [{ speaker: "Patient" as const, text: "I have a sore throat", timestamp: "00:10" }],
   };
 
   it("uses backend response when available", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
-        JSON.stringify({ questions: ["Depuis quand ?"], redFlags: [], askedTopics: ["douleur"] }),
+        JSON.stringify({ questions: ["Since when?"], redFlags: [], askedTopics: ["pain"] }),
         { status: 200 }
       )
     );
     const result = await fetchSuggestedQuestions(payload);
-    expect(result.questions[0]).toBe("Depuis quand ?");
+    expect(result.questions[0]).toBe("Since when?");
   });
 
   it("falls back when backend is unavailable", async () => {

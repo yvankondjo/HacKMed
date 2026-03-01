@@ -7,8 +7,8 @@ def default_lifecycle_stages() -> list[LifecycleStage]:
     return [
         LifecycleStage(
             id="patient-call",
-            title="Patient appelle",
-            description="Capture du besoin, qualification initiale et creation de rendez-vous.",
+            title="Patient Call",
+            description="Need capture, initial triage, and appointment creation.",
             status="done",
             impactedTables=[
                 {"table": "users", "eventLabel": "lookup/create patient user"},
@@ -21,8 +21,8 @@ def default_lifecycle_stages() -> list[LifecycleStage]:
         ),
         LifecycleStage(
             id="day-before-confirmation",
-            title="Confirmation J-1",
-            description="Relance patient et validation de presence avant consultation.",
+            title="Day-Before Confirmation",
+            description="Patient reminder and attendance confirmation before consultation.",
             status="done",
             impactedTables=[
                 {"table": "sms_messages", "eventLabel": "insert type=reminder"},
@@ -32,8 +32,8 @@ def default_lifecycle_stages() -> list[LifecycleStage]:
         ),
         LifecycleStage(
             id="consultation-start",
-            title="Consultation demarre",
-            description="Debut session clinique avec transcription live et resume progressif.",
+            title="Consultation Started",
+            description="Clinical session started with live transcription and progressive summary.",
             status="active",
             impactedTables=[
                 {"table": "consultations", "eventLabel": "insert state=active, started_at"},
@@ -43,8 +43,8 @@ def default_lifecycle_stages() -> list[LifecycleStage]:
         ),
         LifecycleStage(
             id="consultation-end-prescription",
-            title="Fin consultation + ordonnance",
-            description="Cloture medicale, generation compte-rendu et envoi ordonnance.",
+            title="Consultation End + Prescription",
+            description="Medical closure, report generation, and prescription delivery.",
             status="next",
             impactedTables=[
                 {"table": "ai_summaries", "eventLabel": "insert type=final_report"},
@@ -55,8 +55,8 @@ def default_lifecycle_stages() -> list[LifecycleStage]:
         ),
         LifecycleStage(
             id="post-consultation-followup",
-            title="Suivi post-consultation",
-            description="Automatisation des rappels et monitorage d'evolution.",
+            title="Post-Consultation Follow-Up",
+            description="Automated reminders and recovery monitoring.",
             status="next",
             impactedTables=[
                 {"table": "followup_tasks", "eventLabel": "insert follow-up workflow tasks"},

@@ -26,6 +26,35 @@ services:
       - backend
     restart: unless-stopped
 
+  consultation-agent:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      BACKEND_API_BASE_URL: http://backend:8000
+      PYTHONUNBUFFERED: "1"
+      AGENT_NAME: medvoice-consultation
+    command: python agents/consultation_agent.py start
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  outbound-caller:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      BACKEND_API_BASE_URL: http://backend:8000
+      PYTHONUNBUFFERED: "1"
+    command: python agents/outbound_caller.py start
+    depends_on:
+      - backend
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./medvoice-care-connect-main

@@ -69,6 +69,10 @@ export function useTranscriptSocket(options: UseTranscriptSocketOptions = {}) {
     setConnected(false);
   }, []);
 
+  const clearTranscript = useCallback(() => {
+    setTranscript([]);
+  }, []);
+
   /** Inject a message as if it came from the WebSocket (for demo/simulate) */
   const injectMessage = useCallback(
     (entry: TranscriptEntry) => {
@@ -89,5 +93,6 @@ export function useTranscriptSocket(options: UseTranscriptSocketOptions = {}) {
     disconnect,
     injectMessage,
     getSerializableTranscript,
+    clearTranscript,
   };
 }

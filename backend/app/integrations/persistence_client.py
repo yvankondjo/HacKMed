@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -332,6 +332,580 @@ class PostgresPersistenceClient:
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("psycopg is required when DATABASE_URL is configured") from exc
         return psycopg.connect(self._config.database_url, row_factory=dict_row)
+
+    def persist_consultation_report(
+        self,
+        *,
+        appointment_id: str,
+        patient_id: str,
+        transcript: list[dict[str, Any]],
+        summary_text: str,
+        symptoms: list[str],
+        diagnoses: list[str],
+        prescription: dict[str, Any],
+    ) -> bool:
+        if not self.enabled:
+            return False
+
+        now = datetime.now(timezone.utc)
+        medications = prescription.get("medications", []) if isinstance(prescription, dict) else []
+        additional_advice = (
+            prescription.get("additionalAdvice", []) if isinstance(prescription, dict) else []
+        )
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        a.id::text AS appointment_id,
+                        a.patient_id AS patient_id,
+                        a.doctor_id::text AS doctor_id
+                    FROM appointments a
+                    WHERE a.id::text = %s
+                    LIMIT 1
+                    """,
+                    (appointment_id,),
+                )
+                appointment_row = cur.fetchone()
+                if not appointment_row:
+                    return False
+
+                effective_patient_id = str(
+                    appointment_row.get("patient_id") or patient_id
+                )
+                doctor_id = appointment_row.get("doctor_id")
+
+                cur.execute(
+                    """
+                    SELECT id::text AS id
+                    FROM consultations
+                    WHERE appointment_id::text = %s
+                    LIMIT 1
+                    """,
+                    (appointment_id,),
+                )
+                consultation_row = cur.fetchone()
+                if consultation_row:
+                    consultation_id = str(consultation_row.get("id"))
+                    cur.execute(
+                        """
+                        UPDATE consultations
+                        SET ended_at = %s,
+                            state = 'ended',
+                            urgency_score = %s,
+                            detected_symptoms = %s::jsonb,
+                            safety_alerts = %s::jsonb,
+                            updated_at = now()
+                        WHERE id::uuid = %s::uuid
+                        """,
+                        (
+                            now,
+                            8 if any("chest" in s.lower() or "breath" in s.lower() for s in symptoms) else 4,
+                            json.dumps(symptoms),
+                            json.dumps([]),
+                            consultation_id,
+                        ),
+                    )
+                else:
+                    consultation_id = str(uuid4())
+                    cur.execute(
+                        """
+                        INSERT INTO consultations (
+                            id, appointment_id, started_at, ended_at, state, urgency_score,
+                            detected_symptoms, safety_alerts, created_at, updated_at
+                        ) VALUES (
+                            %s::uuid, %s::uuid, %s, %s, 'ended', %s, %s::jsonb, %s::jsonb, now(), now()
+                        )
+                        """,
+                        (
+                            consultation_id,
+                            appointment_id,
+                            now,
+                            now,
+                            8 if any("chest" in s.lower() or "breath" in s.lower() for s in symptoms) else 4,
+                            json.dumps(symptoms),
+                            json.dumps([]),
+                        ),
+                    )
+
+                cur.execute(
+                    """
+                    DELETE FROM transcript_messages
+                    WHERE consultation_id = %s::uuid
+                      AND COALESCE(meta->>'source', '') = 'consultation_summary_api'
+                    """,
+                    (consultation_id,),
+                )
+
+                for message in transcript:
+                    speaker = str(message.get("speaker") or "Patient").strip().lower()
+                    sender_type = "ai" if speaker == "ai" else ("doctor" if speaker == "doctor" else "patient")
+                    sent_at = _parse_iso_ts(str(message.get("timestamp") or "")) or now
+                    cur.execute(
+                        """
+                        INSERT INTO transcript_messages (consultation_id, sender_type, content, sent_at, meta)
+                        VALUES (%s::uuid, %s, %s, %s, %s::jsonb)
+                        """,
+                        (
+                            consultation_id,
+                            sender_type,
+                            str(message.get("text") or ""),
+                            sent_at,
+                            json.dumps({"source": "consultation_summary_api"}),
+                        ),
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO ai_summaries (
+                        appointment_id, consultation_id, type, summary_text, probable_diagnosis,
+                        recommendations, symptoms, urgency_score, model_info, created_at
+                    ) VALUES (
+                        %s::uuid, %s::uuid, 'live_summary', %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, now()
+                    )
+                    """,
+                    (
+                        appointment_id,
+                        consultation_id,
+                        summary_text,
+                        " | ".join(diagnoses[:3]) if diagnoses else None,
+                        json.dumps(additional_advice),
+                        json.dumps(symptoms),
+                        8 if any("chest" in s.lower() or "breath" in s.lower() for s in symptoms) else 4,
+                        json.dumps({"source": "consultation_summary_api"}),
+                    ),
+                )
+
+                should_create_prescription = bool(medications) or bool(additional_advice)
+                if should_create_prescription:
+                    cur.execute(
+                        """
+                        DELETE FROM prescription_items
+                        WHERE prescription_id IN (
+                            SELECT id FROM prescriptions WHERE appointment_id = %s::uuid AND status = 'draft'
+                        )
+                        """,
+                        (appointment_id,),
+                    )
+                    cur.execute(
+                        """
+                        DELETE FROM prescriptions
+                        WHERE appointment_id = %s::uuid AND status = 'draft'
+                        """,
+                        (appointment_id,),
+                    )
+
+                    prescription_id = str(uuid4())
+                    notes = (
+                        "AI generated draft from consultation summary."
+                        + (f" Diagnoses: {'; '.join(diagnoses[:3])}" if diagnoses else "")
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO prescriptions (
+                            id, appointment_id, patient_id, doctor_id, status, issued_at, notes, created_at, updated_at
+                        ) VALUES (
+                            %s::uuid, %s::uuid, %s, %s::uuid, 'draft', %s, %s, now(), now()
+                        )
+                        """,
+                        (
+                            prescription_id,
+                            appointment_id,
+                            effective_patient_id,
+                            doctor_id,
+                            now,
+                            notes,
+                        ),
+                    )
+
+                    for medication in medications:
+                        name = str(medication.get("name") or "").strip()
+                        if not name:
+                            continue
+                        cur.execute(
+                            """
+                            INSERT INTO prescription_items (
+                                prescription_id, medication_name, dosage, frequency, duration, instructions, is_ai_suggested, created_at
+                            ) VALUES (
+                                %s::uuid, %s, %s, %s, %s, %s, true, now()
+                            )
+                            """,
+                            (
+                                prescription_id,
+                                name,
+                                str(medication.get("dosage") or ""),
+                                str(medication.get("frequency") or ""),
+                                str(medication.get("duration") or ""),
+                                "; ".join(str(item) for item in additional_advice if str(item).strip()) or None,
+                            ),
+                        )
+
+            conn.commit()
+        return True
+
+    def get_latest_prescription(
+        self,
+        *,
+        patient_id: str,
+        appointment_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self.enabled:
+            return {"medications": [], "additionalAdvice": []}
+
+        patient_ref = str(patient_id or "").strip()
+        if not patient_ref:
+            return {"medications": [], "additionalAdvice": []}
+
+        query = """
+            SELECT
+                p.id::text AS id,
+                p.appointment_id::text AS appointment_id,
+                p.status AS status,
+                p.issued_at AS issued_at,
+                p.notes AS notes
+            FROM prescriptions p
+            WHERE (p.patient_id = %s OR p.patient_id = %s)
+        """
+        params: list[Any] = [patient_ref, patient_ref]
+        if appointment_id:
+            query += " OR p.appointment_id::text = %s"
+            params.append(appointment_id)
+        query += " ORDER BY COALESCE(p.issued_at, p.created_at) DESC LIMIT 1"
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, tuple(params))
+                row = cur.fetchone()
+                if not row:
+                    return {"medications": [], "additionalAdvice": []}
+
+                prescription_id = str(row.get("id") or "")
+                cur.execute(
+                    """
+                    SELECT
+                        medication_name,
+                        dosage,
+                        frequency,
+                        duration,
+                        instructions
+                    FROM prescription_items
+                    WHERE prescription_id = %s::uuid
+                    ORDER BY created_at ASC
+                    """,
+                    (prescription_id,),
+                )
+                item_rows = cur.fetchall()
+
+        medications: list[dict[str, str]] = []
+        for item in item_rows:
+            name = str(item.get("medication_name") or "").strip()
+            if not name:
+                continue
+            medications.append(
+                {
+                    "name": name,
+                    "dosage": str(item.get("dosage") or ""),
+                    "frequency": str(item.get("frequency") or ""),
+                    "duration": str(item.get("duration") or ""),
+                }
+            )
+
+        additional_advice = _as_str_list(row.get("notes"))
+        if not additional_advice and item_rows:
+            additional_advice = _as_str_list(item_rows[0].get("instructions"))
+
+        return {
+            "id": prescription_id,
+            "appointmentId": row.get("appointment_id"),
+            "status": str(row.get("status") or "draft"),
+            "issuedAt": (
+                row.get("issued_at").isoformat() if isinstance(row.get("issued_at"), datetime) else None
+            ),
+            "medications": medications,
+            "additionalAdvice": additional_advice,
+        }
+
+    def queue_followup_task(
+        self,
+        *,
+        patient_id: str,
+        notes: str,
+    ) -> str | None:
+        if not self.enabled:
+            return None
+
+        patient_ref = str(patient_id or "").strip()
+        if not patient_ref:
+            return None
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO followup_tasks (
+                        patient_id,
+                        scheduled_at,
+                        followup_type,
+                        status,
+                        attempt_number,
+                        notes
+                    ) VALUES (
+                        %s,
+                        now(),
+                        'call',
+                        'pending',
+                        1,
+                        %s
+                    )
+                    RETURNING id::text AS id
+                    """,
+                    (patient_ref, notes[:1200]),
+                )
+                row = cur.fetchone() or {}
+            conn.commit()
+        return str(row.get("id") or "") or None
+
+    def persist_outbound_followup_result(
+        self,
+        *,
+        followup_call_id: str,
+        appointment_id: str | None,
+        patient_id: str,
+        patient_phone: str | None,
+        status: str,
+        duration_seconds: int,
+        summary: str,
+        symptoms: list[str],
+        recommendations: list[str],
+        evolution: str,
+        followup_task_id: str | None = None,
+        profile_conditions: list[str] | None = None,
+        profile_allergies: list[str] | None = None,
+        profile_note: str | None = None,
+    ) -> str | None:
+        if not self.enabled:
+            return None
+
+        appointment_ref = (appointment_id or "").strip() or None
+        patient_ref = str(patient_phone or patient_id or "").strip()
+        if not patient_ref:
+            return None
+
+        clean_duration = max(int(duration_seconds or 0), 0)
+        now = datetime.now(timezone.utc)
+        started_at = now - timedelta(seconds=clean_duration) if clean_duration > 0 else now
+        summary_text = (
+            str(summary or "").strip()
+            or f"Outbound follow-up call completed with status={status}."
+        )
+        profile_note_text = (str(profile_note or "").strip() or summary_text)[:1600]
+        normalized_evolution = (
+            evolution
+            if evolution in {"improvement", "worsening", "stable", "unknown"}
+            else "unknown"
+        )
+        normalized_conditions = _normalize_labels(profile_conditions or symptoms)
+        normalized_allergies = _normalize_labels(profile_allergies)
+        computed_urgency = 4
+        lowered_blob = " ".join(symptoms).lower()
+        if "chest" in lowered_blob or "breath" in lowered_blob:
+            computed_urgency = 8
+        elif status in {"failed", "no-answer", "voicemail"}:
+            computed_urgency = 5
+
+        call_record_id = str(uuid4())
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                doctor_id = None
+                if appointment_ref:
+                    cur.execute(
+                        """
+                        SELECT patient_id, doctor_id::text AS doctor_id
+                        FROM appointments
+                        WHERE id::text = %s
+                        LIMIT 1
+                        """,
+                        (appointment_ref,),
+                    )
+                    appointment_row = cur.fetchone() or {}
+                    if appointment_row.get("patient_id"):
+                        patient_ref = str(appointment_row.get("patient_id"))
+                    doctor_id = appointment_row.get("doctor_id")
+
+                cur.execute(
+                    "SELECT 1 FROM patients WHERE phone = %s LIMIT 1",
+                    (patient_ref,),
+                )
+                patient_exists = bool(cur.fetchone())
+
+                if patient_exists:
+                    for condition in normalized_conditions:
+                        cur.execute(
+                            """
+                            UPDATE patient_conditions
+                            SET status = 'active',
+                                notes = CASE
+                                    WHEN COALESCE(notes, '') = '' THEN %s
+                                    ELSE LEFT(notes || E'\n' || %s, 4000)
+                                END
+                            WHERE patient_id = %s
+                              AND lower(label) = lower(%s)
+                            """,
+                            (
+                                profile_note_text,
+                                profile_note_text,
+                                patient_ref,
+                                condition,
+                            ),
+                        )
+                        if cur.rowcount == 0:
+                            cur.execute(
+                                """
+                                INSERT INTO patient_conditions (patient_id, label, status, notes, start_date)
+                                VALUES (%s, %s, 'active', %s, current_date)
+                                """,
+                                (
+                                    patient_ref,
+                                    condition,
+                                    profile_note_text,
+                                ),
+                            )
+
+                    for allergy in normalized_allergies:
+                        cur.execute(
+                            """
+                            INSERT INTO patient_allergies (patient_id, substance, reaction, severity, noted_at)
+                            SELECT %s, %s, %s, 'unknown', current_date
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM patient_allergies
+                                WHERE patient_id = %s
+                                  AND lower(substance) = lower(%s)
+                            )
+                            """,
+                            (
+                                patient_ref,
+                                allergy,
+                                profile_note_text[:250],
+                                patient_ref,
+                                allergy,
+                            ),
+                        )
+
+                if appointment_ref:
+                    cur.execute(
+                        """
+                        INSERT INTO call_records (
+                            id, patient_id, doctor_id, appointment_id, started_at, ended_at, duration_seconds,
+                            reason, symptoms, summary, recommendations, evolution, urgency_score, recording_url, created_at
+                        ) VALUES (
+                            %s::uuid, %s, %s::uuid, %s::uuid, %s, %s, %s,
+                            %s, %s::jsonb, %s, %s::jsonb, %s, %s, %s, now()
+                        )
+                        """,
+                        (
+                            call_record_id,
+                            patient_ref,
+                            doctor_id,
+                            appointment_ref,
+                            started_at,
+                            now,
+                            clean_duration,
+                            "Post-consultation follow-up call",
+                            json.dumps(symptoms),
+                            summary_text[:4000],
+                            json.dumps(recommendations),
+                            normalized_evolution,
+                            computed_urgency,
+                            None,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO call_records (
+                            id, patient_id, doctor_id, appointment_id, started_at, ended_at, duration_seconds,
+                            reason, symptoms, summary, recommendations, evolution, urgency_score, recording_url, created_at
+                        ) VALUES (
+                            %s::uuid, %s, NULL, NULL, %s, %s, %s,
+                            %s, %s::jsonb, %s, %s::jsonb, %s, %s, %s, now()
+                        )
+                        """,
+                        (
+                            call_record_id,
+                            patient_ref,
+                            started_at,
+                            now,
+                            clean_duration,
+                            "Post-consultation follow-up call",
+                            json.dumps(symptoms),
+                            summary_text[:4000],
+                            json.dumps(recommendations),
+                            normalized_evolution,
+                            computed_urgency,
+                            None,
+                        ),
+                    )
+
+                task_status = "completed" if status == "completed" else "failed"
+                task_note = (
+                    f"followup_call_id={followup_call_id}; status={status}; "
+                    f"duration_seconds={clean_duration}; call_record_id={call_record_id}"
+                )
+                if followup_task_id:
+                    cur.execute(
+                        """
+                        UPDATE followup_tasks
+                        SET status = %s,
+                            notes = COALESCE(notes, '') || %s
+                        WHERE id::text = %s
+                        """,
+                        (
+                            task_status,
+                            f"\n{task_note}",
+                            followup_task_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE followup_tasks
+                        SET status = %s,
+                            notes = COALESCE(notes, '') || %s
+                        WHERE id = (
+                            SELECT id
+                            FROM followup_tasks
+                            WHERE (patient_id = %s OR patient_id = %s)
+                              AND followup_type = 'call'
+                              AND status = 'pending'
+                            ORDER BY scheduled_at DESC
+                            LIMIT 1
+                        )
+                        """,
+                        (
+                            task_status,
+                            f"\n{task_note}",
+                            patient_ref,
+                            patient_id,
+                        ),
+                    )
+
+                if appointment_ref:
+                    cur.execute(
+                        """
+                        INSERT INTO sms_messages (patient_id, appointment_id, message_type, body, status, sent_at)
+                        VALUES (%s, %s::uuid, 'followup', %s, 'sent', now())
+                        """,
+                        (
+                            patient_ref,
+                            appointment_ref,
+                            f"Follow-up call status: {status}.",
+                        ),
+                    )
+
+            conn.commit()
+        return call_record_id
 
     def list_dashboard_appointments(
         self,
@@ -835,7 +1409,6 @@ class PostgresPersistenceClient:
                     FROM call_records
                     WHERE patient_id = %s OR patient_id = %s
                     ORDER BY COALESCE(started_at, created_at) DESC
-                    LIMIT 30
                     """,
                     (effective_patient_phone, effective_patient_id),
                 )

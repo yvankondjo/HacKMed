@@ -1,0 +1,4 @@
+interface:
+  display_name: "LiveKit Agents"
+  short_description: "Build voice AI agents with LiveKit Cloud"
+  default_prompt: "Use this skill to build or update LiveKit Cloud voice agents with verified documentation and required tests."

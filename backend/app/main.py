@@ -9,6 +9,7 @@ from app.models import (
     BookAppointmentRequest,
     CancelAppointmentRequest,
     CancelAppointmentResponse,
+    ConsultationRoomTokenResponse,
     ConsultationSummaryRequest,
     DashboardAppointmentDetailResponse,
     DashboardAppointmentsResponse,
@@ -16,6 +17,9 @@ from app.models import (
     DashboardPatientDetailResponse,
     DashboardPatientsResponse,
     EndConsultationRequest,
+    FollowupCallCompleteRequest,
+    FollowupCallRequest,
+    FollowupCallResponse,
     StartConsultationRequest,
     StageProgressResponse,
     SuggestQuestionsRequest,
@@ -99,10 +103,42 @@ async def consultation_state(appointment_id: str) -> dict:
     return {"state": session.model_dump() if session else None}
 
 
+@app.get(
+    "/api/lifecycle/consultation/{appointment_id}/token",
+    response_model=ConsultationRoomTokenResponse,
+)
+async def consultation_room_token(
+    appointment_id: str,
+    participant_identity: str = Query(..., alias="participantIdentity"),
+    participant_name: str = Query(default="Doctor", alias="participantName"),
+) -> ConsultationRoomTokenResponse:
+    try:
+        return await service.issue_consultation_room_token(
+            appointment_id=appointment_id,
+            participant_identity=participant_identity,
+            participant_name=participant_name,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/api/lifecycle/consultation/end")
 async def consultation_end(request: EndConsultationRequest) -> dict:
     session = service.end_consultation(request.appointmentId)
     return {"ok": session is not None, "session": session.model_dump() if session else None}
+
+
+@app.post("/api/reminder/followup-call", response_model=FollowupCallResponse)
+async def reminder_followup_call(request: FollowupCallRequest) -> FollowupCallResponse:
+    try:
+        return await service.schedule_followup_call(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/reminder/followup-call/complete")
+async def reminder_followup_call_complete(request: FollowupCallCompleteRequest) -> dict:
+    return service.complete_followup_call(request)
 
 
 @app.post("/api/consultation/summary")
@@ -122,6 +158,24 @@ async def booking_calcom(request: BookAppointmentRequest) -> dict:
     try:
         result = await service.book_appointment_and_confirm(request, created_via=request.createdVia)
         return result.model_dump()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/booking/calcom/availability")
+async def booking_calcom_availability(
+    timezone: str | None = Query(default=None),
+    days_ahead: int = Query(default=10, alias="daysAhead"),
+    limit: int = Query(default=5),
+    event_type_id: int | None = Query(default=None, alias="eventTypeId"),
+) -> dict:
+    try:
+        return await service.get_booking_availability(
+            timezone_name=timezone,
+            days_ahead=days_ahead,
+            limit=limit,
+            event_type_id=event_type_id,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
