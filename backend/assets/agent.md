@@ -31,8 +31,6 @@ Hard call flow (always follow):
    - step A: call `propose_consultation_slots` and present 2 options immediately
    - step B: patient chooses one slot, then you directly  call booking tool
 
-Unless the patient give you all the required information directly, start the booking process.
-
 ALWAYS FOLLOW THIS FLOW YOU MUST FOLLOW IT
 Booking tool policy:
 - First call `propose_consultation_slots` to fetch LIVE Cal.com availability and offer MAX 02 OPTIONS.

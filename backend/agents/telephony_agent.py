@@ -165,7 +165,9 @@ def validate_required_env() -> None:
 def load_agent_prompt() -> str:
     agent_file = Path(__file__).parent.parent / "assets" / "agent.md"
     if agent_file.exists():
-        return agent_file.read_text(encoding="utf-8")
+        template = agent_file.read_text(encoding="utf-8")
+        today_date = datetime.now(dt_timezone.utc).date().isoformat()
+        return template.replace("{{TODAY_DATE}}", today_date)
     return (
         "You are MedVoice's clinical voice assistant. "
         "Always respond in English. If the caller speaks another language, ask them to switch to English: "
@@ -276,6 +278,12 @@ class VoiceAssistant(Agent):
         days_ahead: int = 10,
     ) -> str:
         """Return real-time available slots from Cal.com to offer the patient."""
+        logger.info(
+            "Tool call: propose_consultation_slots timezone=%s count=%s days_ahead=%s",
+            timezone,
+            count,
+            days_ahead,
+        )
         safe_count = min(max(count, 2), 5)
         safe_days = min(max(days_ahead, 1), 30)
         availability_payload: dict | None = None
@@ -301,6 +309,11 @@ class VoiceAssistant(Agent):
                         "Please try again in a moment or offer manual callback scheduling."
                     )
                 availability_payload = response.json()
+                logger.info(
+                    "Tool result: propose_consultation_slots source=%s slots=%s",
+                    (availability_payload or {}).get("source"),
+                    len((availability_payload or {}).get("slots") or []),
+                )
         except Exception as exc:  # pragma: no cover
             logger.warning("Cal.com availability lookup failed: %s", exc)
             return (
@@ -359,6 +372,13 @@ class VoiceAssistant(Agent):
     ) -> str:
         """Create booking in Cal.com, send SMS confirmation, and persist call medical context."""
         room_name = _extract_room_name(context)
+        logger.info(
+            "Tool call: book_consultation_with_confirmation room=%s patient_name=%s starts_at_iso=%s timezone=%s",
+            room_name,
+            patient_name,
+            starts_at_iso,
+            timezone,
+        )
         transcript = _build_transcript_payload(room_name)
         clean_name = (patient_name or "").strip()
         if not clean_name:
@@ -414,10 +434,21 @@ class VoiceAssistant(Agent):
             async with httpx.AsyncClient(timeout=25) as client:
                 response = await client.post(f"{BACKEND_API_BASE_URL}/api/booking/calcom", json=payload)
                 if response.status_code >= 400:
+                    logger.error(
+                        "Tool result: book_consultation_with_confirmation failed status=%s body=%s",
+                        response.status_code,
+                        response.text[:300],
+                    )
                     return booking_failure_message(response.status_code, response.text)
                 else:
                     body = response.json()
+                    logger.info(
+                        "Tool result: book_consultation_with_confirmation success appointment_id=%s sms_status=%s",
+                        body.get("appointmentId"),
+                        body.get("smsStatus"),
+                    )
         except Exception as exc:  
+            logger.exception("Tool exception: book_consultation_with_confirmation failed: %s", exc)
             return f"Booking failed: {exc}"
         finally:
             if room_name in CALL_TRANSCRIPTS:
@@ -495,9 +526,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     CALL_TRANSCRIPTS.pop(room_name, None)
     CALL_STARTED_AT[room_name] = utc_now_iso()
 
+    llm_model = (
+        os.getenv("OPENAI_LLM_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "gpt-4.1"
+    )
     session = AgentSession(
         stt=build_stt(),
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=openai.LLM(
+            model=llm_model,
+            temperature=0.2,
+            parallel_tool_calls=False,
+        ),
         tts=build_tts(),
         vad=silero.VAD.load(),
     )
