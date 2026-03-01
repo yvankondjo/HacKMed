@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 import os
 import time
@@ -40,7 +41,9 @@ try:
     from livekit.plugins.turn_detector.multilingual import MultilingualModel
 except ImportError:
     # Fallback to EOVad if multilingual not available
-    from livekit.plugins.silero import VAD as MultilingualModel
+    import livekit.plugins.turn_detector.eovad as eovad
+
+    MultilingualModel = eovad.EOVad
 
 load_dotenv()
 
@@ -53,6 +56,16 @@ SCRIBE_LANGUAGE = os.getenv("SCRIBE_LANGUAGE", "fr")
 TOPIC_CONTROL = "clinic.control"  # frontend -> agent
 TOPIC_SUGGESTIONS = "clinic.suggestions"  # agent -> frontend
 TOPIC_SOAP = "clinic.soap"  # agent -> frontend
+TOPIC_TRANSCRIPT = "clinic.transcript"  # agent -> frontend (parsed transcript)
+
+# Mapping: Speechmatics assigns S1 to the first speaker detected, S2 to the second.
+# Convention: S1 = Doctor (primary), S2 = Patient.
+SPEAKER_ROLE_MAP: dict[str, str] = {
+    "S1": "doctor",
+    "S2": "patient",
+}
+
+_SPEAKER_TAG_RE = re.compile(r"<(S\d+)>(.*?)</\1>", re.DOTALL)
 
 
 @dataclass
@@ -171,16 +184,14 @@ class ClinicScribeManager:
     async def _start_session(self, participant: rtc.RemoteParticipant) -> AgentSession:
         stt = speechmatics.STT(
             language=SCRIBE_LANGUAGE,
-            enable_partials=True,
-            enable_diarization=False,  # We are transcribing one person per session.
+            enable_diarization=True,
+            speaker_active_format="<{speaker_id}>{text}</{speaker_id}>",
         )
 
         session = AgentSession(
             stt=stt,
             vad=self.ctx.proc.userdata["vad"],
-            turn_detection=self.ctx.proc.userdata[
-                "vad"
-            ],  # Use basic VAD as standard fallback if turn detector unavailable
+            turn_detection=MultilingualModel(),
         )
 
         await session.start(
@@ -203,13 +214,34 @@ class ClinicScribeManager:
         await sess.aclose()
 
     async def on_final_transcript(self, speaker_identity: str, text: str):
-        role = self._roles.get(speaker_identity, "unknown")
-        self._turns.append(
-            Turn(ts=time.time(), speaker=f"{speaker_identity}({role})", text=text)
-        )
+        # Parse diarization tags like <S1>Bonjour</S1> from Speechmatics
+        speaker_id, clean_text = _parse_speaker_tag(text)
 
-        logger.info("%s: %s", speaker_identity, text)
+        if speaker_id:
+            role = SPEAKER_ROLE_MAP.get(speaker_id, "unknown")
+        else:
+            # Fallback: use participant identity heuristic
+            role = self._roles.get(speaker_identity, "unknown")
+            clean_text = text
+
+        self._turns.append(Turn(ts=time.time(), speaker=role, text=clean_text))
+
+        logger.info(
+            "[%s/%s] %s: %s", speaker_id or "?", role, speaker_identity, clean_text
+        )
         self._trigger_suggestions()
+
+        # Send parsed transcript entry to frontend so it knows the speaker role
+        await self._send_json(
+            topic=TOPIC_TRANSCRIPT,
+            payload={
+                "type": "transcript",
+                "speaker": "Doctor" if role == "doctor" else "Patient",
+                "text": clean_text,
+                "speaker_id": speaker_id or "unknown",
+                "timestamp": time.time(),
+            },
+        )
 
     def _trigger_suggestions(self):
         if self._suggest_task and not self._suggest_task.done():
@@ -356,6 +388,17 @@ class ClinicScribeManager:
     async def _send_json(self, *, topic: str, payload: dict[str, Any]):
         text = json.dumps(payload, ensure_ascii=False)
         await self.room.local_participant.send_text(text, topic=topic)
+
+
+def _parse_speaker_tag(text: str) -> tuple[str | None, str]:
+    """Extract speaker_id and clean text from '<S1>hello</S1>' format.
+
+    Returns (speaker_id, clean_text). If no tag found, returns (None, original_text).
+    """
+    m = _SPEAKER_TAG_RE.search(text)
+    if m:
+        return m.group(1), m.group(2).strip()
+    return None, text.strip()
 
 
 def _safe_json(s: str) -> dict[str, Any] | None:
