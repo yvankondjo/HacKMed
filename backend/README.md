@@ -62,7 +62,7 @@ CONSULTATION_AGENT_NAME=medvoice-consultation
 CONSULTATION_AUTO_DISPATCH=true
 LIVEKIT_OUTBOUND_AGENT_NAME=outbound-caller
 SIP_OUTBOUND_TRUNK_ID=<your-livekit-sip-outbound-trunk-id>
-FOLLOWUP_TEST_PHONE=0784221830
+FOLLOWUP_TEST_PHONE=0765540003
 OUTBOUND_CALL_LANGUAGE=en
 OPENAI_API_KEY=xxxx
 SPEECHMATICS_API_KEY=xxxx
@@ -164,7 +164,7 @@ For telephony calls, transcript lines captured by the agent are automatically at
   "appointmentId": "55841ae8-b82e-4425-9f62-f978fc52634d",
   "patientId": "+33765540003",
   "patientName": "Jacob Doe",
-  "patientPhone": "0784221830",
+  "patientPhone": "0765540003",
   "doctorName": "Dr. Laurent Martin"
 }
 ```

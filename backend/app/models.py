@@ -116,6 +116,25 @@ class SuggestQuestionsRequest(BaseModel):
     transcript: list[TranscriptMessageInput]
 
 
+class SendPrescriptionRequest(BaseModel):
+    appointmentId: str
+    patientId: str
+    patientName: str
+    doctorName: str
+    medications: list[Medication] = Field(default_factory=list)
+    patientEmail: str | None = None
+    additionalAdvice: list[str] = Field(default_factory=list)
+    transcript: list[TranscriptMessageInput] = Field(default_factory=list)
+
+
+class SendPrescriptionResponse(BaseModel):
+    ok: bool
+    status: str
+    messageId: str | None = None
+    to: str | None = None
+    detail: str | None = None
+
+
 class SuggestQuestionsResponse(BaseModel):
     questions: list[str]
     redFlags: list[str]

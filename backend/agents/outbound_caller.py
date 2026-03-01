@@ -27,7 +27,7 @@ load_dotenv()
 logger = logging.getLogger("medvoice.outbound")
 BACKEND_API_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 OUTBOUND_AGENT_NAME = (os.getenv("LIVEKIT_OUTBOUND_AGENT_NAME") or "outbound-caller").strip()
-FOLLOWUP_TEST_PHONE = (os.getenv("FOLLOWUP_TEST_PHONE") or "0784221830").strip()
+FOLLOWUP_TEST_PHONE = (os.getenv("FOLLOWUP_TEST_PHONE") or "0765540003").strip()
 SIP_OUTBOUND_TRUNK_ID = (os.getenv("SIP_OUTBOUND_TRUNK_ID") or "").strip()
 
 

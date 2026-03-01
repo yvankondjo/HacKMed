@@ -39,6 +39,7 @@ import {
   postConsultationEnd,
   postConsultationStart,
   postTranscriptBatch,
+  postPrescriptionSend,
 } from "@/services/lifecycleApi";
 
 type SoapNote = {
@@ -73,6 +74,8 @@ function asStringArray(input: unknown): string[] {
     .map((item) => String(item || "").trim())
     .filter(Boolean);
 }
+
+const DEFAULT_PRESCRIPTION_RECIPIENT = "yvankondjo8@gmail.com";
 
 function LiveKitTranscriptListener({
   onTranscript,
@@ -292,6 +295,7 @@ export default function AppointmentDetail() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [redFlags, setRedFlags] = useState<string[]>([]);
   const [isLaunchingReminder, setIsLaunchingReminder] = useState(false);
+  const [sendingPrescription, setSendingPrescription] = useState(false);
 
   // ─── LiveKit state ───
   const [token, setToken] = useState<string | null>(null);
@@ -720,6 +724,41 @@ export default function AppointmentDetail() {
     soapPayload,
     aiSummary,
   ]);
+
+  const handleValidateAndSend = async () => {
+    if (!appointment || !patient) return;
+    if (sendingPrescription) return;
+    const recipientEmail =
+      (import.meta.env.VITE_PRESCRIPTION_RECIPIENT_EMAIL || DEFAULT_PRESCRIPTION_RECIPIENT).trim() ||
+      DEFAULT_PRESCRIPTION_RECIPIENT;
+    setSendingPrescription(true);
+    try {
+      const response = await postPrescriptionSend({
+        appointmentId: appointment.id,
+        patientId: patient.id,
+        patientName: `${patient.firstName} ${patient.lastName}`.trim(),
+        doctorName: appointment.doctor,
+        medications: prescription,
+        patientEmail: recipientEmail,
+        additionalAdvice: asStringArray(soapPayload?.followups),
+        transcript: transcript,
+      });
+
+      if (!response) {
+        toast.error("Failed to connect to the prescription service.");
+        return;
+      }
+
+      if (response.ok) {
+        toast.success(`Prescription sent successfully to ${response.to || recipientEmail}`);
+        setValidated(true);
+      } else {
+        toast.error(`Failed to send prescription: ${response.detail || "Unknown error"}`);
+      }
+    } finally {
+      setSendingPrescription(false);
+    }
+  };
 
   const applySuggestedQuestion = (question: string) => {
     injectMessage({
@@ -1266,9 +1305,9 @@ export default function AppointmentDetail() {
               </ScrollArea>
               {showPrescription && !validated && (
                 <div className="p-4 border-t border-border shrink-0">
-                  <Button onClick={() => setValidated(true)} className="w-full gap-2" size="default">
-                    <Send className="h-4 w-4" />
-                    Validate & Send
+                  <Button onClick={handleValidateAndSend} className="w-full gap-2" size="default" disabled={sendingPrescription}>
+                    {sendingPrescription ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    {sendingPrescription ? "Sending..." : "Validate & Send"}
                   </Button>
                 </div>
               )}

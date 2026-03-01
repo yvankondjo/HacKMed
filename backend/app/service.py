@@ -13,6 +13,7 @@ from app.config import load_calendar_config, load_persistence_config, load_sms_c
 from app.integrations.calcom_client import CalComClient
 from app.integrations.livekit_dispatcher import DispatchResult, LiveKitOutboundDispatcher
 from app.integrations.persistence_client import PostgresPersistenceClient
+from app.integrations.resend_email import send_prescription_to_patient
 from app.integrations.twilio_client import TwilioSmsClient
 from app.lifecycle import default_lifecycle_stages
 from app.models import (
@@ -43,6 +44,8 @@ from app.models import (
     SuggestQuestionsRequest,
     SuggestQuestionsResponse,
     TranscriptMessageInput,
+    SendPrescriptionRequest,
+    SendPrescriptionResponse,
 )
 
 logger = logging.getLogger("medvoice.service")
@@ -610,7 +613,7 @@ class LifecycleService:
             != "false"
         )
         self._outbound_agent_name = (os.getenv("LIVEKIT_OUTBOUND_AGENT_NAME") or "outbound-caller").strip()
-        self._followup_default_phone = (os.getenv("FOLLOWUP_TEST_PHONE") or "0784221830").strip()
+        self._followup_default_phone = (os.getenv("FOLLOWUP_TEST_PHONE") or "0765540003").strip()
         self._calcom_client = CalComClient(load_calendar_config())
         self._sms_client = TwilioSmsClient(load_sms_config())
         self._persistence_client = PostgresPersistenceClient(load_persistence_config())
@@ -695,6 +698,40 @@ class LifecycleService:
 
     def get_consultation_state(self, appointment_id: str) -> ConsultationSessionState | None:
         return self._consultation_sessions.get(appointment_id)
+
+    def send_prescription(self, request: SendPrescriptionRequest) -> SendPrescriptionResponse:
+        logger.info(f"Received request to send prescription for {request.patientName} to {request.patientEmail}")
+        
+        self.add_event(
+            stage_id="consultation-end-prescription",
+            appointment_id=request.appointmentId,
+            patient_id=request.patientId,
+            payload={"action": "send_prescription", "medications": len(request.medications)}
+        )
+        
+        meds = [med.model_dump() for med in request.medications]
+        
+        logger.info("Calling resend API integration...")
+        
+        result = send_prescription_to_patient(
+            transcript=[msg.model_dump() for msg in request.transcript],
+            patient_name=request.patientName,
+            doctor_name=request.doctorName,
+            appointment_id=request.appointmentId,
+            medications=meds,
+            patient_email=request.patientEmail,
+            additional_advice=request.additionalAdvice,
+        )
+        
+        logger.info(f"Resend integration returned: ok={result.ok}, status={result.status}, detail={result.detail}")
+        
+        return SendPrescriptionResponse(
+            ok=result.ok,
+            status=result.status,
+            messageId=result.message_id,
+            to=result.to,
+            detail=result.detail,
+        )
 
     async def issue_consultation_room_token(
         self,

@@ -155,7 +155,7 @@ def test_followup_call_schedule_endpoint() -> None:
                 "appointmentId": "apt-followup-1",
                 "patientId": "pat-followup-1",
                 "patientName": "Test Patient",
-                "patientPhone": "0784221830",
+                "patientPhone": "0765540003",
                 "doctorName": "Dr. Test",
             },
         )

@@ -61,6 +61,43 @@ export async function postConsultationEnd(appointmentId: string): Promise<void> 
   }
 }
 
+export interface SendPrescriptionRequest {
+  appointmentId: string;
+  patientId: string;
+  patientName: string;
+  doctorName: string;
+  medications: Array<{ name: string; dosage: string; frequency: string; duration: string }>;
+  patientEmail?: string;
+  additionalAdvice: string[];
+  transcript?: any[];
+}
+
+export interface SendPrescriptionResponse {
+  ok: boolean;
+  status: string;
+  messageId?: string;
+  to?: string;
+  detail?: string;
+}
+
+export async function postPrescriptionSend(
+  payload: SendPrescriptionRequest
+): Promise<SendPrescriptionResponse | null> {
+  try {
+    const res = await fetch("/api/prescription/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error(`Prescription API error: ${res.status}`);
+    }
+    return (await res.json()) as SendPrescriptionResponse;
+  } catch {
+    return null;
+  }
+}
+
 export interface FollowupMedication {
   name: string;
   dosage: string;

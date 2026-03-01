@@ -21,9 +21,10 @@ from app.models import (
     FollowupCallRequest,
     FollowupCallResponse,
     StartConsultationRequest,
-    StageProgressResponse,
     SuggestQuestionsRequest,
     TranscriptMessageInput,
+    SendPrescriptionRequest,
+    SendPrescriptionResponse,
 )
 from app.service import service
 
@@ -150,6 +151,12 @@ async def consultation_summary(request: ConsultationSummaryRequest) -> dict:
 @app.post("/api/consultation/suggest-questions")
 async def consultation_suggest_questions(request: SuggestQuestionsRequest) -> dict:
     result = service.suggest_questions(request)
+    return result.model_dump()
+
+
+@app.post("/api/prescription/send", response_model=SendPrescriptionResponse)
+async def send_prescription(request: SendPrescriptionRequest) -> dict:
+    result = service.send_prescription(request)
     return result.model_dump()
 
 
