@@ -46,5 +46,4 @@ def test_validate_required_env_passes_when_present(monkeypatch: pytest.MonkeyPat
 def test_voice_assistant_exposes_booking_tool() -> None:
     agent = VoiceAssistant()
     assert hasattr(agent, "book_consultation_with_confirmation")
-    assert hasattr(agent, "load_patient_context_by_phone")
     assert hasattr(agent, "propose_consultation_slots")

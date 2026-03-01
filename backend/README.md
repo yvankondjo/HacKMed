@@ -104,8 +104,6 @@ CONSULTATION_LLM_ADJUDICATION_MIN_TURNS=4
 CONSULTATION_LLM_ADJUDICATION_CHUNK_TURNS=40
 CONSULTATION_LLM_ADJUDICATION_CHUNK_MAX_CHARS=20000
 CONSULTATION_FINAL_TRANSCRIPT_MAX_CHARS=0
-TELEPHONY_WELCOME_MESSAGE=Hello, welcome to MedVoice Care Connect. I can help schedule your consultation today. Are you already a patient with us, or is this your first visit?
-
 BACKEND_API_BASE_URL=http://127.0.0.1:8000
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/medvoice
 DEFAULT_DOCTOR_ID=<optional-doctor-uuid-from-doctors-table>
