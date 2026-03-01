@@ -116,3 +116,8 @@ class ConsultationSessionState(BaseModel):
     transcriptCount: int = 0
     latestSuggestedQuestions: list[str] = Field(default_factory=list)
     latestRedFlags: list[str] = Field(default_factory=list)
+
+
+class TokenResponse(BaseModel):
+    token: str
+    url: str

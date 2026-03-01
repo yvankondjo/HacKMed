@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,6 +15,7 @@ from app.models import (
     StartConsultationRequest,
     StageProgressResponse,
     SuggestQuestionsRequest,
+    TokenResponse,
     TranscriptMessageInput,
 )
 from app.service import service
@@ -32,7 +38,9 @@ async def health() -> dict:
 
 @app.get("/api/lifecycle/stages", response_model=StageProgressResponse)
 async def lifecycle_stages() -> StageProgressResponse:
-    return StageProgressResponse(stages=service.list_stages(), eventCount=service.event_count)
+    return StageProgressResponse(
+        stages=service.list_stages(), eventCount=service.event_count
+    )
 
 
 @app.post("/api/lifecycle/patient-call")
@@ -72,7 +80,10 @@ async def consultation_start(request: StartConsultationRequest) -> dict:
 @app.post("/api/lifecycle/consultation/transcript")
 async def consultation_transcript(payload: dict) -> dict:
     appointment_id = payload.get("appointmentId")
-    messages = [TranscriptMessageInput.model_validate(item) for item in payload.get("messages", [])]
+    messages = [
+        TranscriptMessageInput.model_validate(item)
+        for item in payload.get("messages", [])
+    ]
     if appointment_id:
         service.save_transcript(appointment_id=appointment_id, messages=messages)
     event = service.add_event(
@@ -90,10 +101,27 @@ async def consultation_state(appointment_id: str) -> dict:
     return {"state": session.model_dump() if session else None}
 
 
+@app.get(
+    "/api/lifecycle/consultation/{appointment_id}/token", response_model=TokenResponse
+)
+async def get_consultation_token(
+    appointment_id: str, participantIdentity: str, participantName: str
+) -> TokenResponse:
+    # We pass the participant info to the service to mint a JWT
+    return service.generate_token(
+        appointment_id=appointment_id,
+        participant_identity=participantIdentity,
+        participant_name=participantName,
+    )
+
+
 @app.post("/api/lifecycle/consultation/end")
 async def consultation_end(request: EndConsultationRequest) -> dict:
     session = service.end_consultation(request.appointmentId)
-    return {"ok": session is not None, "session": session.model_dump() if session else None}
+    return {
+        "ok": session is not None,
+        "session": session.model_dump() if session else None,
+    }
 
 
 @app.post("/api/consultation/summary")

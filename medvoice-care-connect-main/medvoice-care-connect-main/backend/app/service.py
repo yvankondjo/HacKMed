@@ -19,8 +19,11 @@ from app.models import (
     LifecycleStage,
     SuggestQuestionsRequest,
     SuggestQuestionsResponse,
+    TokenResponse,
     TranscriptMessageInput,
 )
+import os
+from livekit.api import AccessToken, VideoGrants, RoomConfiguration, RoomAgentDispatch
 
 
 class LifecycleService:
@@ -33,7 +36,9 @@ class LifecycleService:
         self._sms_client = TwilioSmsClient(load_sms_config())
 
     def _clone_stages(self) -> list[LifecycleStage]:
-        return [LifecycleStage.model_validate(stage.model_dump()) for stage in self._stages]
+        return [
+            LifecycleStage.model_validate(stage.model_dump()) for stage in self._stages
+        ]
 
     def list_stages(self) -> list[LifecycleStage]:
         stages = self._clone_stages()
@@ -80,7 +85,9 @@ class LifecycleService:
         if session:
             session.transcriptCount += len(serialized_messages)
 
-    def start_consultation(self, appointment_id: str, patient_id: str) -> ConsultationSessionState:
+    def start_consultation(
+        self, appointment_id: str, patient_id: str
+    ) -> ConsultationSessionState:
         session = self._consultation_sessions.get(appointment_id)
         if not session:
             session = ConsultationSessionState(
@@ -92,7 +99,9 @@ class LifecycleService:
             self._consultation_sessions[appointment_id] = session
         else:
             session.status = "active"
-            session.startedAt = session.startedAt or datetime.now(timezone.utc).isoformat()
+            session.startedAt = (
+                session.startedAt or datetime.now(timezone.utc).isoformat()
+            )
         return session
 
     def end_consultation(self, appointment_id: str) -> ConsultationSessionState | None:
@@ -103,20 +112,56 @@ class LifecycleService:
         session.endedAt = datetime.now(timezone.utc).isoformat()
         return session
 
-    def get_consultation_state(self, appointment_id: str) -> ConsultationSessionState | None:
+    def get_consultation_state(
+        self, appointment_id: str
+    ) -> ConsultationSessionState | None:
         return self._consultation_sessions.get(appointment_id)
+
+    def generate_token(
+        self, appointment_id: str, participant_identity: str, participant_name: str
+    ) -> TokenResponse:
+        room_name = f"consultation-{appointment_id}"
+        grant = VideoGrants(room_join=True, room=room_name)
+
+        # Get livekit credentials from env
+        api_key = os.getenv("LIVEKIT_API_KEY")
+        api_secret = os.getenv("LIVEKIT_API_SECRET")
+        url = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
+
+        if not api_key or not api_secret:
+            raise ValueError("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set")
+
+        room_config = RoomConfiguration(
+            name=room_name,
+            agents=[RoomAgentDispatch(agent_name="medvoice-consultation")],
+        )
+
+        access_token = (
+            AccessToken(api_key, api_secret)
+            .with_identity(participant_identity)
+            .with_name(participant_name)
+            .with_grants(grant)
+            .with_room_config(room_config)
+        )
+
+        return TokenResponse(token=access_token.to_jwt(), url=url)
 
     def generate_summary(
         self, request: ConsultationSummaryRequest
     ) -> ConsultationSummaryResponse:
         # If transcript is omitted, use what was already streamed in consultation/transcript endpoint.
-        transcript = request.transcript or self._transcripts.get(request.appointmentId, [])
+        transcript = request.transcript or self._transcripts.get(
+            request.appointmentId, []
+        )
         self.save_transcript(request.appointmentId, transcript)
         self.add_event(
             stage_id="consultation-end-prescription",
             appointment_id=request.appointmentId,
             patient_id=request.patientId,
-            payload={"messages": len(transcript), "finished_at": datetime.now(timezone.utc).isoformat()},
+            payload={
+                "messages": len(transcript),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
         self.add_event(
             stage_id="post-consultation-followup",
@@ -137,7 +182,11 @@ class LifecycleService:
             else "Consultation resumee automatiquement a partir de la transcription."
         )
 
-        symptoms = ["Douleur gorge", "Dysphagie"] if has_throat else ["Symptomes non specifiques"]
+        symptoms = (
+            ["Douleur gorge", "Dysphagie"]
+            if has_throat
+            else ["Symptomes non specifiques"]
+        )
         if has_fever:
             symptoms.append("Fievre")
 
@@ -200,7 +249,9 @@ class LifecycleService:
         if "fievre" not in asked_topics:
             questions.append("Avez-vous eu de la fievre, et a combien ?")
         if "douleur" not in asked_topics:
-            questions.append("Sur une echelle de 0 a 10, quelle est l'intensite de la douleur ?")
+            questions.append(
+                "Sur une echelle de 0 a 10, quelle est l'intensite de la douleur ?"
+            )
         if "allergies" not in asked_topics:
             questions.append("Avez-vous des allergies medicamenteuses connues ?")
         if "traitements" not in asked_topics:
@@ -215,7 +266,9 @@ class LifecycleService:
             red_flags.append("Confusion mentionnee")
 
         if not questions:
-            questions.append("Les symptomes ont-ils tendance a s'ameliorer ou a s'aggraver ?")
+            questions.append(
+                "Les symptomes ont-ils tendance a s'ameliorer ou a s'aggraver ?"
+            )
 
         result = SuggestQuestionsResponse(
             questions=questions[:5],
