@@ -57,7 +57,7 @@ services:
 
   frontend:
     build:
-      context: ./medvoice-care-connect-main
+      context: ./frontend
       dockerfile: Dockerfile
     depends_on:
       - backend

@@ -1303,11 +1303,11 @@ export default function AppointmentDetail() {
                   </motion.div>
                 )}
               </ScrollArea>
-              {showPrescription && !validated && (
+              {showPrescription && (
                 <div className="p-4 border-t border-border shrink-0">
                   <Button onClick={handleValidateAndSend} className="w-full gap-2" size="default" disabled={sendingPrescription}>
                     {sendingPrescription ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                    {sendingPrescription ? "Sending..." : "Validate & Send"}
+                    {sendingPrescription ? "Sending..." : validated ? "Send Again (Test)" : "Validate & Send"}
                   </Button>
                 </div>
               )}

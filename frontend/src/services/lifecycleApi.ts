@@ -84,17 +84,31 @@ export async function postPrescriptionSend(
   payload: SendPrescriptionRequest
 ): Promise<SendPrescriptionResponse | null> {
   try {
+    console.info("[Prescription] POST /api/prescription/send", payload);
     const res = await fetch("/api/prescription/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      throw new Error(`Prescription API error: ${res.status}`);
+      const detail = await res.text();
+      console.error("[Prescription] backend non-2xx", res.status, detail);
+      return {
+        ok: false,
+        status: "http_error",
+        detail: detail || `HTTP ${res.status}`,
+      };
     }
-    return (await res.json()) as SendPrescriptionResponse;
-  } catch {
-    return null;
+    const body = (await res.json()) as SendPrescriptionResponse;
+    console.info("[Prescription] backend response", body);
+    return body;
+  } catch (err) {
+    console.error("[Prescription] network/error calling backend", err);
+    return {
+      ok: false,
+      status: "network_error",
+      detail: err instanceof Error ? err.message : "Unknown frontend error",
+    };
   }
 }
 

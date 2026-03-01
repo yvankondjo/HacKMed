@@ -13,7 +13,7 @@ from app.config import load_calendar_config, load_persistence_config, load_sms_c
 from app.integrations.calcom_client import CalComClient
 from app.integrations.livekit_dispatcher import DispatchResult, LiveKitOutboundDispatcher
 from app.integrations.persistence_client import PostgresPersistenceClient
-from app.integrations.resend_email import send_prescription_to_patient
+from app.integrations.resend_onefile import send_prescription_to_patient
 from app.integrations.twilio_client import TwilioSmsClient
 from app.lifecycle import default_lifecycle_stages
 from app.models import (

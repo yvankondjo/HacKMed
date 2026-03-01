@@ -21,6 +21,7 @@ from app.models import (
     FollowupCallRequest,
     FollowupCallResponse,
     StartConsultationRequest,
+    StageProgressResponse,
     SuggestQuestionsRequest,
     TranscriptMessageInput,
     SendPrescriptionRequest,
