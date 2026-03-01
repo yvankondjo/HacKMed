@@ -1,0 +1,12 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+python-dotenv==1.1.1
+httpx==0.28.1
+twilio==9.5.2
+livekit-agents==1.2.8
+livekit-plugins-openai==1.2.8
+livekit-plugins-silero==1.2.8
+livekit-plugins-speechmatics==1.2.8
+pytest==8.4.1
+psycopg[binary]==3.2.1
