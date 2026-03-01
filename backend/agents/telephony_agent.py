@@ -207,7 +207,14 @@ def build_stt():
             configured_domain,
         )
     operating_point = (os.getenv("STT_OPERATING_POINT", "enhanced") or "").strip().lower()
-    max_delay = read_float_env("STT_MAX_DELAY", 0.7)
+    max_delay_raw = read_float_env("STT_MAX_DELAY", 0.7)
+    max_delay = min(4.0, max(0.7, max_delay_raw))
+    if max_delay != max_delay_raw:
+        logger.warning(
+            "STT_MAX_DELAY=%s is outside Speechmatics allowed range [0.7, 4.0]; clamped to %s.",
+            max_delay_raw,
+            max_delay,
+        )
     silence_trigger = read_float_env("STT_EOU_SILENCE", 0.35)
 
     # Speechmatics plugin argument names can vary across SDK versions.
@@ -236,7 +243,7 @@ def build_stt():
         for kwargs in attempts:
             try:
                 return speechmatics.STT(**kwargs)
-            except TypeError:
+            except (TypeError, ValueError):
                 continue
 
     logger.warning(

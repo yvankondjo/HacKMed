@@ -86,7 +86,14 @@ def _build_stt():
             configured_domain,
         )
     operating_point = (os.getenv("OUTBOUND_STT_OPERATING_POINT") or os.getenv("STT_OPERATING_POINT") or "enhanced").strip().lower()
-    max_delay = _read_float_env("OUTBOUND_STT_MAX_DELAY", 0.7)
+    max_delay_raw = _read_float_env("OUTBOUND_STT_MAX_DELAY", 0.7)
+    max_delay = min(4.0, max(0.7, max_delay_raw))
+    if max_delay != max_delay_raw:
+        logger.warning(
+            "OUTBOUND_STT_MAX_DELAY=%s is outside Speechmatics allowed range [0.7, 4.0]; clamped to %s.",
+            max_delay_raw,
+            max_delay,
+        )
     silence_trigger = _read_float_env("OUTBOUND_EOU_SILENCE", 0.35)
 
     language_kwargs: list[dict[str, str]] = [{key: language} for key in ("language", "language_code")] if language else [{}]
@@ -100,7 +107,7 @@ def _build_stt():
             try:
                 stt = speechmatics.STT(**kwargs)
                 return stt
-            except TypeError:
+            except (TypeError, ValueError):
                 continue
     raise RuntimeError(
         "Speechmatics STT medical domain is required but unsupported in this SDK version."

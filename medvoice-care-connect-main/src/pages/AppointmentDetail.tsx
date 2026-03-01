@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { enUS } from "date-fns/locale";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   ArrowLeft,
   Play,
@@ -292,7 +292,6 @@ export default function AppointmentDetail() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [redFlags, setRedFlags] = useState<string[]>([]);
   const [isLaunchingReminder, setIsLaunchingReminder] = useState(false);
-  const [finalTranscript, setFinalTranscript] = useState<TranscriptEntry[]>([]);
 
   // ─── LiveKit state ───
   const [token, setToken] = useState<string | null>(null);
@@ -498,7 +497,12 @@ export default function AppointmentDetail() {
   useEffect(() => {
     if (!consultationEnded) return;
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [consultationEnded, finalTranscript]);
+  }, [consultationEnded, transcript]);
+
+  useEffect(() => {
+    if (consultationEnded) return;
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [consultationEnded, transcript]);
 
   useEffect(() => {
     if (!consultationStarted || consultationEnded) return;
@@ -557,7 +561,6 @@ export default function AppointmentDetail() {
     lastSuggestionAppliedAtRef.current = 0;
     setSuggestedQuestions([]);
     setRedFlags([]);
-    setFinalTranscript([]);
     setConsultationStarted(true);
     summaryFinalizedRef.current = false;
     clearSoapFallbackTimer();
@@ -582,41 +585,32 @@ export default function AppointmentDetail() {
     void postConsultationStart(appointment.id, patient.id);
   };
 
-  type SummaryTranscriptEntry = {
-    speaker: "Doctor" | "Patient";
-    text: string;
-    timestamp: string;
-  };
-
   const finalizeConsultationOutputs = useCallback(
     async (payload: SoapPayload | null) => {
       if (!appointment || !patient) return;
+      const payloadObj =
+        payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+      const hasStructuredSoap = Boolean(payloadObj?.soap && typeof payloadObj.soap === "object");
+      const hasAdjudicatedTranscript =
+        Array.isArray(payloadObj?.enhanced_transcript) &&
+        (payloadObj.enhanced_transcript as unknown[]).length > 0;
+      const hasSignalLists =
+        asStringArray(payloadObj?.meds_mentioned).length > 0 ||
+        asStringArray(payloadObj?.followups).length > 0 ||
+        asStringArray(payloadObj?.safety_checks).length > 0;
+      const isProvisionalFallback = !hasStructuredSoap && !hasAdjudicatedTranscript && !hasSignalLists;
+
+      // Real SOAP payloads lock the flow. Fallback payloads remain provisional so
+      // late adjudicated SOAP can still replace the UI.
       if (summaryFinalizedRef.current) return;
-      summaryFinalizedRef.current = true;
+      if (!isProvisionalFallback) {
+        summaryFinalizedRef.current = true;
+      }
       clearSoapFallbackTimer();
       setSoapPayload(payload);
 
       const fallbackTranscript = getSerializableTranscript();
-      const enhancedTranscript: SummaryTranscriptEntry[] = Array.isArray(payload?.enhanced_transcript)
-        ? payload.enhanced_transcript
-            .map((entry) => {
-              if (!entry || typeof entry !== "object") return null;
-              const parsed = entry as Record<string, unknown>;
-              const speakerRaw = String(parsed.speaker || "").trim().toLowerCase();
-              const speaker: "Doctor" | "Patient" =
-                speakerRaw === "doctor" || speakerRaw === "dr." || speakerRaw === "dr"
-                  ? "Doctor"
-                  : "Patient";
-              const text = String(parsed.text || "").trim();
-              if (!text) return null;
-              const timestamp = String(parsed.timestamp || format(new Date(), "HH:mm:ss"));
-              return { speaker, text, timestamp };
-            })
-            .filter((entry): entry is SummaryTranscriptEntry => entry !== null)
-        : [];
-      const transcriptForSummary =
-        enhancedTranscript.length > 0 ? enhancedTranscript : fallbackTranscript;
-      setFinalTranscript(transcriptForSummary);
+      const transcriptForSummary = fallbackTranscript;
       const soapForSummary =
         payload && typeof payload === "object"
           ? {
@@ -663,7 +657,7 @@ export default function AppointmentDetail() {
     soapFallbackTimerRef.current = window.setTimeout(() => {
       // Keep UX unblocked if SOAP packet is delayed/lost.
       void finalizeConsultationOutputs({});
-    }, 12000);
+    }, 30000);
 
     try {
       await postConsultationEnd(appointment.id);
@@ -970,66 +964,53 @@ export default function AppointmentDetail() {
           <div className="flex-1 flex flex-col border-r border-border bg-background">
             <div className="px-4 py-3 border-b border-border shrink-0 flex items-center gap-2 bg-card">
               <span className="h-2 w-2 rounded-full bg-primary" />
-              <span className="text-xs font-medium text-foreground">
-                {consultationEnded
-                  ? "Adjudicator-Corrected Conversation"
-                  : "Consultation Recording"}
-              </span>
-              {consultationEnded && (
-                <span className="text-[10px] text-muted-foreground ml-auto">
-                  {finalTranscript.length} message{finalTranscript.length !== 1 ? "s" : ""}
-                </span>
-              )}
+              <span className="text-xs font-medium text-foreground">Conversation Transcript</span>
+              <span className="text-[10px] text-muted-foreground ml-auto">{transcript.length} msg</span>
             </div>
             <ScrollArea className="flex-1 p-4">
-              {!consultationEnded ? (
-                <div className="h-full flex items-center justify-center">
-                  <div className="text-center max-w-sm space-y-2">
-                    <p className="text-sm font-medium text-foreground">Recording in progress</p>
-                    <p className="text-xs text-muted-foreground">
-                      The conversation is being captured in the background and will be shown after
-                      the consultation ends.
-                    </p>
+              <div className="space-y-2">
+                {transcript.length === 0 ? (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="text-center max-w-sm space-y-2">
+                      <p className="text-sm font-medium text-foreground">
+                        {consultationEnded ? "No transcript available." : "Waiting for transcript..."}
+                      </p>
+                      {!consultationEnded && (
+                        <p className="text-xs text-muted-foreground">
+                          Speak to start streaming the conversation.
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <AnimatePresence>
-                    {finalTranscript.map((msg, i) => (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className={`px-4 py-3 rounded-lg text-sm ${
-                          msg.speaker === "Doctor" ? "bg-[#EEF6FF]" : "bg-[#F8FAFC]"
+                ) : (
+                  transcript.map((msg, i) => (
+                    <div
+                      key={`conv-${i}`}
+                      className={`px-3 py-2 rounded-md text-xs ${
+                        msg.speaker === "Doctor" ? "bg-[#EEF6FF]" : "bg-[#F8FAFC]"
+                      }`}
+                    >
+                      <span
+                        className={`font-semibold mr-1.5 ${
+                          msg.speaker === "Doctor" ? "text-primary" : "text-foreground"
                         }`}
                       >
-                        <span
-                          className={`font-semibold text-xs mr-2 ${
-                            msg.speaker === "Doctor" ? "text-primary" : "text-foreground"
-                          }`}
-                        >
-                          {msg.speaker === "Doctor" ? "Dr." : "Patient"}
-                        </span>
-                        <span className="text-foreground/90">{msg.text}</span>
-                        <span className="text-[10px] text-muted-foreground ml-2">{msg.timestamp}</span>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                  {finalTranscript.length === 0 && (
-                    <p className="text-sm text-muted-foreground text-center py-16">
-                      No conversation transcript available.
-                    </p>
-                  )}
-                  <div ref={transcriptEndRef} />
-                </div>
-              )}
+                        {msg.speaker === "Doctor" ? "Dr." : "Patient"}
+                      </span>
+                      <span className="text-foreground/90">{msg.text}</span>
+                      <span className="text-[10px] text-muted-foreground ml-1.5">
+                        {msg.timestamp}
+                      </span>
+                    </div>
+                  ))
+                )}
+                <div ref={transcriptEndRef} />
+              </div>
             </ScrollArea>
             {!consultationEnded && (
               <div className="p-3 border-t border-border bg-card shrink-0 flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Live transcript display is hidden while the appointment is recording.
+                  Live transcript is streaming in real time.
                 </p>
                 <TrackToggle
                   source={Track.Source.Microphone}

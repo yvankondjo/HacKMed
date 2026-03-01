@@ -94,6 +94,50 @@ def _normalize_transcript_speaker(label: str) -> str:
     return value
 
 
+def _coerce_transcript_entry(raw: Any) -> TranscriptMessageInput | None:
+    if not isinstance(raw, dict):
+        return None
+    text = str(raw.get("text") or "").strip()
+    if not text:
+        return None
+
+    speaker_raw = str(raw.get("speaker") or "").strip().lower()
+    if speaker_raw in {"doctor", "dr", "dr.", "assistant", "system"}:
+        speaker = "Doctor"
+    elif speaker_raw in {"patient", "caller", "user"}:
+        speaker = "Patient"
+    elif speaker_raw == "ai":
+        speaker = "AI"
+    else:
+        return None
+
+    timestamp_raw = raw.get("timestamp")
+    timestamp = str(timestamp_raw).strip() if timestamp_raw is not None else None
+    if timestamp == "":
+        timestamp = None
+    try:
+        return TranscriptMessageInput(speaker=speaker, text=text, timestamp=timestamp)
+    except Exception:
+        return None
+
+
+def _extract_adjudicated_transcript_from_soap(soap: dict[str, Any] | None) -> list[TranscriptMessageInput]:
+    if not isinstance(soap, dict):
+        return []
+    for key in ("adjudicated_transcript", "enhanced_transcript"):
+        raw = soap.get(key)
+        if not isinstance(raw, list):
+            continue
+        parsed: list[TranscriptMessageInput] = []
+        for item in raw:
+            entry = _coerce_transcript_entry(item)
+            if entry is not None:
+                parsed.append(entry)
+        if parsed:
+            return parsed
+    return []
+
+
 def _classify_binary_answer(text: str) -> str:
     lowered = (text or "").strip().lower()
     if not lowered:
@@ -157,6 +201,265 @@ def _extract_reported_allergies(patient_text: str) -> list[str]:
         if cleaned and cleaned not in {"anything", "none"}:
             results.append(cleaned.title())
     return _unique_compact(results)
+
+
+_NUMBER_WORDS: dict[str, int] = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def _word_to_int(token: str) -> int | None:
+    text = (token or "").strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return _NUMBER_WORDS.get(text)
+
+
+def _text_window_around_alias(text: str, aliases: tuple[str, ...], radius: int = 140) -> str:
+    lowered = (text or "").lower()
+    if not lowered:
+        return ""
+    for alias in aliases:
+        idx = lowered.find(alias.lower())
+        if idx == -1:
+            continue
+        start = max(0, idx - radius)
+        end = min(len(text), idx + radius)
+        return text[start:end]
+    return text
+
+
+def _extract_med_frequency(text: str) -> str:
+    lowered = (text or "").lower()
+    patterns: list[tuple[re.Pattern[str], str]] = [
+        (re.compile(r"\bevery\s*(\d{1,2})\s*(?:h|hr|hrs|hour|hours)\b"), "Every {n} hours"),
+        (re.compile(r"\btwice(?:\s+(?:a|per))?\s+day\b"), "Twice daily"),
+        (re.compile(r"\b(?:2|two)\s+times(?:\s+(?:a|per))?\s+day\b"), "Twice daily"),
+        (re.compile(r"\bthree\s+times(?:\s+(?:a|per))?\s+day\b"), "3 times daily"),
+        (re.compile(r"\b(?:3|three)\s*x\s*(?:a|per)?\s*day\b"), "3 times daily"),
+        (re.compile(r"\bonce(?:\s+(?:a|per))?\s+day\b"), "Once daily"),
+        (re.compile(r"\bas needed\b"), "As needed"),
+    ]
+    for pattern, label in patterns:
+        match = pattern.search(lowered)
+        if not match:
+            continue
+        if "{n}" in label:
+            return label.format(n=match.group(1))
+        return label
+    return ""
+
+
+def _extract_med_duration(text: str) -> str:
+    lowered = (text or "").lower()
+    match = re.search(
+        r"\bfor\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+"
+        r"(day|days|week|weeks|month|months)\b",
+        lowered,
+    )
+    if match:
+        number = _word_to_int(match.group(1))
+        if number is not None:
+            unit = match.group(2)
+            return f"{number} {unit}"
+    if "as needed" in lowered:
+        return "As needed"
+    return ""
+
+
+def _extract_med_dosage(text: str) -> str:
+    lowered = (text or "").lower()
+    match = re.search(r"\b(\d{1,4}(?:\.\d+)?)\s*(mg|g|mcg|µg)\b", lowered)
+    if not match:
+        return ""
+    value = match.group(1)
+    unit = match.group(2)
+    return f"{value} {unit}"
+
+
+def _plan_score(text: str) -> int:
+    lowered = (text or "").lower()
+    cues = (
+        "prescribe",
+        "prescription",
+        "take",
+        "dose",
+        "session",
+        "physio",
+        "physiotherapist",
+        "paracetamol",
+        "ibuprofen",
+        "amoxicillin",
+        "azithromycin",
+        "antibiotic",
+    )
+    return sum(lowered.count(cue) for cue in cues)
+
+
+def _select_prescriber_text(transcript: list[TranscriptMessageInput]) -> tuple[str, str]:
+    doctor_lines: list[str] = []
+    patient_lines: list[str] = []
+    all_lines: list[str] = []
+
+    for item in transcript:
+        line = str(item.text or "").strip()
+        if not line:
+            continue
+        all_lines.append(line)
+        role = _normalize_transcript_speaker(item.speaker)
+        if role == "doctor":
+            doctor_lines.append(line)
+        elif role == "patient":
+            patient_lines.append(line)
+
+    doctor_blob = " ".join(doctor_lines)
+    patient_blob = " ".join(patient_lines)
+    all_blob = " ".join(all_lines)
+
+    doctor_score = _plan_score(doctor_blob)
+    patient_score = _plan_score(patient_blob)
+
+    if patient_score > doctor_score and patient_lines:
+        selected = patient_blob
+        source = "patient"
+    elif doctor_lines:
+        selected = doctor_blob
+        source = "doctor"
+    else:
+        selected = all_blob
+        source = "all"
+
+    if _plan_score(selected) == 0 and all_blob:
+        selected = all_blob
+        source = "all"
+
+    return selected, source
+
+
+def _extract_plan_medications(plan_text: str) -> list[dict[str, str]]:
+    text = str(plan_text or "").strip()
+    lowered = text.lower()
+    meds: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _add_med(name: str, window: str, *, default_dose: str = "", default_freq: str = "", default_duration: str = "") -> None:
+        key = name.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        dosage = _extract_med_dosage(window) or default_dose
+        frequency = _extract_med_frequency(window) or default_freq
+        duration = _extract_med_duration(window) or default_duration
+        meds.append(
+            {
+                "name": name,
+                "dosage": dosage,
+                "frequency": frequency,
+                "duration": duration,
+            }
+        )
+
+    has_physio = _has_any(lowered, ("physio", "physiotherapy", "physiotherapist"))
+    physio_negated = re.search(
+        r"(?:do not|don't|no)\s+(?:go|need|start|do).{0,35}(?:physio|physiotherapy|physiotherapist)",
+        lowered,
+    )
+    if has_physio and (not physio_negated or re.search(r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+sessions?\b", lowered)):
+        window = _text_window_around_alias(text, ("physio", "physiotherapy", "physiotherapist"))
+        sessions = 0
+        session_match = re.search(
+            r"\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+sessions?\b",
+            lowered,
+        )
+        if session_match:
+            sessions = _word_to_int(session_match.group(1)) or 0
+        dosage = f"{sessions} sessions" if sessions > 0 else "As prescribed"
+        frequency = _extract_med_frequency(window) or "As prescribed"
+        duration = _extract_med_duration(window) or ""
+        if sessions > 0 and not duration and frequency:
+            freq_match = re.search(r"\b(\d{1,2}|one|two|three)\s+sessions?\s+(?:per|a)\s+week\b", lowered)
+            if freq_match:
+                per_week = _word_to_int(freq_match.group(1)) or 0
+                if per_week > 0:
+                    approx_weeks = max(1, round(sessions / per_week))
+                    duration = f"{approx_weeks} weeks"
+        meds.append(
+            {
+                "name": "Physiotherapy sessions",
+                "dosage": dosage,
+                "frequency": frequency,
+                "duration": duration,
+            }
+        )
+        seen.add("physiotherapy sessions")
+
+    paracetamol_aliases = ("paracetamol", "acetaminophen", "etamol")
+    if any(alias in lowered for alias in paracetamol_aliases):
+        window = _text_window_around_alias(text, paracetamol_aliases)
+        _add_med("Paracetamol", window, default_freq="As needed")
+
+    ibuprofen_aliases = ("ibuprofen",)
+    if any(alias in lowered for alias in ibuprofen_aliases):
+        window = _text_window_around_alias(text, ibuprofen_aliases)
+        _add_med("Ibuprofen", window, default_freq="As needed")
+
+    amoxicillin_aliases = ("amoxicillin", "amoxicilline")
+    if any(alias in lowered for alias in amoxicillin_aliases):
+        window = _text_window_around_alias(text, amoxicillin_aliases)
+        _add_med("Amoxicillin", window)
+
+    azithromycin_aliases = ("azithromycin",)
+    if any(alias in lowered for alias in azithromycin_aliases):
+        window = _text_window_around_alias(text, azithromycin_aliases)
+        _add_med("Azithromycin", window)
+
+    if "antibiotic" in lowered and not any(
+        med["name"].lower() in {"amoxicillin", "azithromycin"} for med in meds
+    ):
+        window = _text_window_around_alias(text, ("antibiotic", "antibiotics"))
+        _add_med("Antibiotic (doctor-specified)", window)
+
+    return meds
+
+
+def _extract_dynamic_diagnoses(combined_text: str, detected_symptoms: list[str]) -> list[str]:
+    lowered = (combined_text or "").lower()
+    diagnoses: list[str] = []
+
+    if _has_any(lowered, ("back pain", "lower back", "lumbar", "lumbago", "sciatica")):
+        diagnoses.append("Low-back pain syndrome")
+    if _has_any(lowered, ("numbness in my leg", "numbness in my legs", "radiat", "sciatica", "leg pain")):
+        diagnoses.append("Possible lumbar radicular involvement")
+    if _has_any(lowered, ("virus", "viral")):
+        diagnoses.append("Possible viral syndrome")
+    if _has_any(lowered, ("infection", "antibiotic", "bacterial")):
+        diagnoses.append("Possible infectious etiology (to confirm clinically)")
+    if _has_any(lowered, ("can't walk", "cannot walk", "difficulty walking")):
+        diagnoses.append("Functional impairment due to pain")
+
+    if not diagnoses and detected_symptoms:
+        diagnoses.extend(f"Symptom-focused assessment: {symptom}" for symptom in detected_symptoms[:2])
+
+    if not diagnoses:
+        diagnoses.append("Clinical assessment to be confirmed from consultation findings")
+
+    return _unique_compact(diagnoses)[:4]
 
 
 def _next_patient_reply(transcript: list[TranscriptMessageInput], start_idx: int) -> str:
@@ -579,8 +882,16 @@ class LifecycleService:
     def generate_summary(
         self, request: ConsultationSummaryRequest
     ) -> ConsultationSummaryResponse:
-        # If transcript is omitted, use what was already streamed in consultation/transcript endpoint.
-        transcript = request.transcript or self._transcripts.get(request.appointmentId, [])
+        # Prefer adjudicated transcript when available to improve role consistency
+        # and medication-plan extraction quality.
+        adjudicated_transcript = _extract_adjudicated_transcript_from_soap(request.soap)
+        transcript_source = "adjudicated"
+        if adjudicated_transcript:
+            transcript = adjudicated_transcript
+        else:
+            transcript_source = "raw"
+            # If transcript is omitted, use what was already streamed in consultation/transcript endpoint.
+            transcript = request.transcript or self._transcripts.get(request.appointmentId, [])
         self.save_transcript(request.appointmentId, transcript)
 
         context = self._load_summary_context(request.appointmentId, request.patientId)
@@ -609,25 +920,9 @@ class LifecycleService:
             if prior and prior.lower() not in {sym.lower() for sym in detected_symptoms}:
                 detected_symptoms.append(prior)
 
-        has_fever = any(sym.lower() == "fever" for sym in detected_symptoms)
-        has_throat = any(sym.lower() == "sore throat" for sym in detected_symptoms)
-        has_cough = any(sym.lower() == "cough" for sym in detected_symptoms)
         has_red_flag = any(
             sym.lower() in {"shortness of breath", "chest pain"} for sym in detected_symptoms
-        )
-        has_back_pain_case = _has_any(
-            combined,
-            (
-                "back pain",
-                "lower back",
-                "lumbar",
-                "lumbago",
-                "sciatica",
-                "physio",
-                "physiotherapy",
-                "physiotherapist",
-            ),
-        )
+        ) or _has_any(combined, ("shortness of breath", "cannot breathe", "chest pain"))
 
         allergy_text = " ".join(context["allergies"]).lower()
         penicillin_allergy = _has_any(allergy_text, ("penicillin", "amoxicillin"))
@@ -636,141 +931,59 @@ class LifecycleService:
             ("aspirin", "ibuprofen", "naproxen", "nsaid", "anti inflammatory"),
         )
 
-        # Keep clinical recommendations anchored to transcript content.
-        diagnoses: list[str] = []
-        medications: list[dict[str, str]] = []
-        additional_advice: list[str] = []
+        prescriber_text, prescriber_source = _select_prescriber_text(transcript)
+        prescriber_blob = " ".join(
+            [combined, prescriber_text, soap_blob]
+            if prescriber_text
+            else [combined, soap_blob]
+        ).strip()
 
-        if has_back_pain_case:
-            if not any(sym.lower() == "back pain" for sym in detected_symptoms):
-                detected_symptoms.insert(0, "Back pain")
+        diagnoses = _extract_dynamic_diagnoses(prescriber_blob, detected_symptoms)
+        medications = _extract_plan_medications(prescriber_text)
+        if not medications:
+            # Fallback if speaker roles were swapped and the plan was spoken by the other role.
+            medications = _extract_plan_medications(combined)
 
-            diagnoses.extend(
-                [
-                    "Mechanical low-back pain",
-                    "Lumbar strain (to confirm clinically)",
-                    "Functional limitation due to back pain",
-                ]
-            )
-            if has_red_flag:
-                diagnoses.append("Urgent in-person neurological assessment if red flags persist")
+        if nsaid_allergy:
+            medications = [
+                med for med in medications if "ibuprofen" not in str(med.get("name", "")).lower()
+            ]
+        if penicillin_allergy:
+            medications = [
+                med
+                for med in medications
+                if "amoxicillin" not in str(med.get("name", "")).lower()
+            ]
 
-            physio_sessions = 10
-            session_match = re.search(
-                r"\b(\d{1,2})\s*(?:session|sessions)\s*(?:of|with)?\s*(?:physio|physiotherapy|physiotherapist)\b",
-                combined,
-            )
-            if session_match:
-                try:
-                    physio_sessions = max(4, min(30, int(session_match.group(1))))
-                except ValueError:
-                    physio_sessions = 10
-
-            paracetamol_dose = "500 to 1000mg"
-            dose_match = re.search(
-                r"(?:paracetamol|acetaminophen|etamol)[^0-9]{0,24}(\d{2,4})\s*(?:mg|milligram)",
-                combined,
-            )
-            if dose_match:
-                try:
-                    parsed_dose = int(dose_match.group(1))
-                    if 250 <= parsed_dose <= 1500:
-                        paracetamol_dose = f"{parsed_dose}mg"
-                except ValueError:
-                    pass
-
-            paracetamol_frequency = "Every 8 hours if needed"
-            if _has_any(combined, ("twice a day", "twice daily", "2 times", "two times")):
-                paracetamol_frequency = "Twice daily if needed"
-
-            medications.append(
-                {
-                    "name": "Physiotherapy sessions",
-                    "dosage": f"{physio_sessions} sessions",
-                    "frequency": "2 sessions per week",
-                    "duration": f"{max(2, (physio_sessions + 1) // 2)} weeks",
-                }
-            )
-            medications.append(
-                {
-                    "name": "Paracetamol",
-                    "dosage": paracetamol_dose,
-                    "frequency": paracetamol_frequency,
-                    "duration": "5 to 10 days",
-                }
-            )
-            if not nsaid_allergy and _has_any(combined, ("severe pain", "can't sleep", "cannot sleep", "intense pain")):
+        if not medications and isinstance(request.soap.get("meds_mentioned"), list):
+            for item in request.soap.get("meds_mentioned", []):
+                name = str(item or "").strip()
+                if not name:
+                    continue
                 medications.append(
                     {
-                        "name": "Ibuprofen",
-                        "dosage": "400mg",
-                        "frequency": "2 to 3 times daily with meals",
-                        "duration": "3 to 5 days",
+                        "name": name,
+                        "dosage": "",
+                        "frequency": "As prescribed",
+                        "duration": "",
                     }
                 )
 
-            additional_advice.extend(
-                [
-                    "Continue gentle movement and avoid heavy lifting for the next few days.",
-                    "Proceed with physiotherapy sessions and reassess pain progression weekly.",
-                    "Seek urgent care for weakness, numbness, bladder changes, or worsening pain.",
-                ]
+        additional_advice: list[str] = []
+        if _has_any(prescriber_blob, ("avoid heavy lifting", "no heavy lifting")):
+            additional_advice.append("Avoid heavy lifting until symptoms improve.")
+        if _has_any(prescriber_blob, ("rest", "hydration", "drink fluids")):
+            additional_advice.append("Follow the hydration/rest advice discussed during the consultation.")
+        if has_red_flag or _has_any(prescriber_blob, ("numbness", "weakness", "bladder", "bowel")):
+            additional_advice.append(
+                "Urgent reassessment is required if weakness, numbness, bladder/bowel changes, chest pain, or breathing issues occur."
             )
-        else:
-            if has_fever and has_throat:
-                diagnoses.append("Acute pharyngitis (bacterial vs viral)")
-            if has_cough and has_fever:
-                diagnoses.append("Upper respiratory tract infection")
-            if has_red_flag:
-                diagnoses.append("Requires urgent in-person assessment for red-flag symptoms")
-            diagnoses.extend(
-                [
-                    "Viral syndrome",
-                    "Symptomatic follow-up recommended",
-                ]
+        if penicillin_allergy and any("amoxicillin" in str(med.get("name", "")).lower() for med in medications):
+            additional_advice.append(
+                f"Allergy conflict detected with documented allergies: {', '.join(context['allergies'])}."
             )
-
-            if has_fever and has_throat:
-                medications.append(
-                    (
-                        {
-                            "name": "Azithromycin",
-                            "dosage": "500mg",
-                            "frequency": "Once daily",
-                            "duration": "3 days",
-                        }
-                        if penicillin_allergy
-                        else {
-                            "name": "Amoxicillin",
-                            "dosage": "1g",
-                            "frequency": "3 times daily",
-                            "duration": "6 days",
-                        }
-                    )
-                )
-            medications.append(
-                {
-                    "name": "Paracetamol",
-                    "dosage": "1000mg",
-                    "frequency": "Every 6 to 8 hours if needed",
-                    "duration": "3 to 5 days",
-                }
-            )
-
-            additional_advice.extend(
-                [
-                    "Hydration and rest are recommended.",
-                    "Return quickly if symptoms worsen.",
-                    "Emergency care advised if chest pain or breathing difficulty occurs."
-                    if has_red_flag
-                    else "Follow-up if no improvement in 48 hours.",
-                    (
-                        f"Medication selected to avoid documented allergy: {', '.join(context['allergies'])}."
-                        if penicillin_allergy
-                        else ""
-                    ),
-                ]
-            )
+        if not additional_advice:
+            additional_advice.append("Follow the clinician instructions discussed during the consultation and monitor symptom evolution.")
 
         if isinstance(request.soap.get("followups"), list):
             additional_advice.extend(str(item).strip() for item in request.soap.get("followups", []))
@@ -795,8 +1008,12 @@ class LifecycleService:
             )
         if request.soap:
             summary_chunks.append("SOAP note from consultation agent was incorporated.")
-        if has_back_pain_case:
-            summary_chunks.append("Plan includes a musculoskeletal recovery pathway with physiotherapy.")
+        if medications:
+            summary_chunks.append(
+                f"Prescription extracted from consultation dialogue ({prescriber_source}-led plan parsing)."
+            )
+        if transcript_source == "adjudicated":
+            summary_chunks.append("Adjudicated transcript was prioritized for prescription extraction.")
         summary = " ".join(summary_chunks)
 
         persisted_report = False
