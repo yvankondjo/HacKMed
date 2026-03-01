@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { enUS } from "date-fns/locale";
@@ -55,6 +55,18 @@ type SoapPayload = {
   enhanced_transcript?: unknown;
 };
 
+type ConsultationContextPayload = {
+  appointment_id?: string;
+  patient_id?: string;
+  appointment_motif?: string;
+  patient_name?: string;
+  patient_age?: number | null;
+  allergies?: string[];
+  antecedents?: string[];
+  history_highlights?: string[];
+  recent_call_highlights?: string[];
+};
+
 function asStringArray(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
   return input
@@ -67,16 +79,19 @@ function LiveKitTranscriptListener({
   onSuggestions,
   onSoap,
   shouldRequestEnd,
+  consultationContext,
 }: {
   onTranscript: (entry: TranscriptEntry) => void;
   onSuggestions: (questions: string[], redFlags: string[]) => void;
   onSoap: (soapData: SoapPayload) => void;
   shouldRequestEnd: boolean;
+  consultationContext: ConsultationContextPayload | null;
 }) {
   const room = useRoomContext();
   const { localParticipant } = room;
   const hasSentEndCmd = useRef(false);
   const hasSentRoleCmd = useRef(false);
+  const sentContextPayloadRef = useRef<string>("");
 
   useEffect(() => {
     if (shouldRequestEnd && localParticipant && !hasSentEndCmd.current) {
@@ -119,6 +134,27 @@ function LiveKitTranscriptListener({
       console.error("Failed to send role via data channel:", e);
     });
   }, [localParticipant]);
+
+  useEffect(() => {
+    if (!localParticipant || !consultationContext) return;
+    const payload = JSON.stringify({
+      type: "set_context",
+      identity: localParticipant.identity,
+      context: consultationContext,
+    });
+    if (sentContextPayloadRef.current === payload) return;
+    sentContextPayloadRef.current = payload;
+
+    localParticipant.sendText(payload, { topic: "clinic.control" }).catch((e) => {
+      console.error("Failed to send context via text stream:", e);
+    });
+
+    const enc = new TextEncoder();
+    const data = enc.encode(payload);
+    localParticipant.publishData(data, { topic: "clinic.control" }).catch((e) => {
+      console.error("Failed to send context via data channel:", e);
+    });
+  }, [localParticipant, consultationContext]);
   
   useEffect(() => {
     if (!room) return;
@@ -128,10 +164,25 @@ function LiveKitTranscriptListener({
       try {
         const msg = JSON.parse(rawPayload) as Record<string, unknown>;
         if (topic === "clinic.transcript" && typeof msg.text === "string") {
+          let transcriptTs = format(new Date(), "HH:mm:ss");
+          const rawTs = msg.timestamp;
+          if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
+            transcriptTs = format(new Date(rawTs * 1000), "HH:mm:ss");
+          } else if (typeof rawTs === "string" && rawTs.trim()) {
+            const numericTs = Number(rawTs);
+            if (Number.isFinite(numericTs) && rawTs.trim() !== "") {
+              transcriptTs = format(new Date(numericTs * 1000), "HH:mm:ss");
+            } else {
+              const parsedTs = new Date(rawTs);
+              if (!Number.isNaN(parsedTs.getTime())) {
+                transcriptTs = format(parsedTs, "HH:mm:ss");
+              }
+            }
+          }
           onTranscript({
             speaker: msg.speaker === "Doctor" ? "Doctor" : "Patient",
             text: msg.text,
-            timestamp: format(new Date(), "HH:mm:ss"),
+            timestamp: transcriptTs,
           });
         } else if (topic === "clinic.suggestions") {
           onSuggestions(asStringArray(msg.questions), asStringArray(msg.missing_info));
@@ -206,10 +257,19 @@ function extractSoapMedications(soapData: SoapPayload | null): Medication[] {
 }
 
 export default function AppointmentDetail() {
+  const SUGGESTIONS_MIN_DISPLAY_MS = 10_000;
   const { id } = useParams();
   const navigate = useNavigate();
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const lastSyncedTranscriptRef = useRef(0);
+  const suggestionsRequestSeqRef = useRef(0);
+  const suggestionSwapTimerRef = useRef<number | null>(null);
+  const lastSuggestionAppliedAtRef = useRef(0);
+  const queuedSuggestionsRef = useRef<{ questions: string[]; flags: string[] } | null>(null);
+  const currentSuggestionsRef = useRef<{ questions: string[]; flags: string[] }>({
+    questions: [],
+    flags: [],
+  });
   const [detail, setDetail] = useState<DashboardAppointmentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -232,6 +292,7 @@ export default function AppointmentDetail() {
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [redFlags, setRedFlags] = useState<string[]>([]);
   const [isLaunchingReminder, setIsLaunchingReminder] = useState(false);
+  const [finalTranscript, setFinalTranscript] = useState<TranscriptEntry[]>([]);
 
   // ─── LiveKit state ───
   const [token, setToken] = useState<string | null>(null);
@@ -262,11 +323,92 @@ export default function AppointmentDetail() {
     }
   }, []);
 
+  const clearSuggestionSwapTimer = useCallback(() => {
+    if (suggestionSwapTimerRef.current !== null) {
+      window.clearTimeout(suggestionSwapTimerRef.current);
+      suggestionSwapTimerRef.current = null;
+    }
+  }, []);
+
+  const applySuggestionUpdate = useCallback(
+    (questions: string[], flags: string[]) => {
+      const normalizedQuestions = Array.from(
+        new Set((questions || []).map((item) => String(item || "").trim()).filter(Boolean))
+      );
+      const normalizedFlags = Array.from(
+        new Set((flags || []).map((item) => String(item || "").trim()).filter(Boolean))
+      );
+
+      if (normalizedQuestions.length === 0 && normalizedFlags.length === 0) {
+        return;
+      }
+
+      const arraysEqual = (left: string[], right: string[]) =>
+        left.length === right.length && left.every((value, idx) => value === right[idx]);
+
+      const current = currentSuggestionsRef.current;
+      if (
+        arraysEqual(normalizedQuestions, current.questions) &&
+        arraysEqual(normalizedFlags, current.flags)
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+      const elapsed = now - lastSuggestionAppliedAtRef.current;
+      const canReplaceImmediately =
+        current.questions.length === 0 && current.flags.length === 0
+          ? true
+          : elapsed >= SUGGESTIONS_MIN_DISPLAY_MS;
+
+      if (canReplaceImmediately) {
+        clearSuggestionSwapTimer();
+        queuedSuggestionsRef.current = null;
+        currentSuggestionsRef.current = {
+          questions: normalizedQuestions,
+          flags: normalizedFlags,
+        };
+        setSuggestedQuestions(normalizedQuestions);
+        setRedFlags(normalizedFlags);
+        lastSuggestionAppliedAtRef.current = now;
+        return;
+      }
+
+      queuedSuggestionsRef.current = {
+        questions: normalizedQuestions,
+        flags: normalizedFlags,
+      };
+
+      if (suggestionSwapTimerRef.current !== null) return;
+
+      const delay = Math.max(250, SUGGESTIONS_MIN_DISPLAY_MS - elapsed);
+      suggestionSwapTimerRef.current = window.setTimeout(() => {
+        suggestionSwapTimerRef.current = null;
+        const queued = queuedSuggestionsRef.current;
+        if (!queued) return;
+        queuedSuggestionsRef.current = null;
+
+        const latestCurrent = currentSuggestionsRef.current;
+        const alreadyDisplayed =
+          arraysEqual(queued.questions, latestCurrent.questions) &&
+          arraysEqual(queued.flags, latestCurrent.flags);
+        if (alreadyDisplayed) return;
+
+        currentSuggestionsRef.current = queued;
+        setSuggestedQuestions(queued.questions);
+        setRedFlags(queued.flags);
+        lastSuggestionAppliedAtRef.current = Date.now();
+      }, delay);
+    },
+    [SUGGESTIONS_MIN_DISPLAY_MS, clearSuggestionSwapTimer]
+  );
+
   useEffect(() => {
     return () => {
       clearSoapFallbackTimer();
+      clearSuggestionSwapTimer();
     };
-  }, [clearSoapFallbackTimer]);
+  }, [clearSoapFallbackTimer, clearSuggestionSwapTimer]);
 
   useEffect(() => {
     let active = true;
@@ -297,8 +439,50 @@ export default function AppointmentDetail() {
 
   const appointment = detail?.appointment ?? null;
   const patient = detail?.patient ?? null;
-  const history = detail?.history ?? [];
-  const relatedCalls = detail?.calls ?? [];
+  const history = useMemo(() => detail?.history ?? [], [detail?.history]);
+  const relatedCalls = useMemo(() => detail?.calls ?? [], [detail?.calls]);
+
+  const consultationContext = useMemo<ConsultationContextPayload | null>(() => {
+    if (!appointment || !patient) return null;
+    const patientName = `${patient.firstName} ${patient.lastName}`.trim();
+    const patientAge = patient.dateOfBirth
+      ? Math.floor(
+          (Date.now() - new Date(patient.dateOfBirth).getTime()) /
+            (365.25 * 24 * 60 * 60 * 1000)
+        )
+      : null;
+
+    const historyHighlights = history
+      .map((item) => {
+        const motif = String(item.motif || "").trim();
+        const summary = String(item.summary || "").trim();
+        const composed = [motif, summary].filter(Boolean).join(": ").trim();
+        return composed ? composed.slice(0, 220) : "";
+      })
+      .filter(Boolean)
+      .slice(0, 4);
+
+    const recentCallHighlights = relatedCalls
+      .map((call) => {
+        const summary = String(call.summary || "").trim();
+        if (summary) return summary.slice(0, 220);
+        return String(call.motif || "").trim().slice(0, 220);
+      })
+      .filter(Boolean)
+      .slice(0, 4);
+
+    return {
+      appointment_id: appointment.id,
+      patient_id: patient.id,
+      appointment_motif: appointment.motif,
+      patient_name: patientName,
+      patient_age: patientAge,
+      allergies: patient.allergies || [],
+      antecedents: patient.antecedents || [],
+      history_highlights: historyHighlights,
+      recent_call_highlights: recentCallHighlights,
+    };
+  }, [appointment, patient, history, relatedCalls]);
 
   const hasAllergyConflict =
     !!patient?.allergies.some((a) =>
@@ -312,8 +496,9 @@ export default function AppointmentDetail() {
     });
 
   useEffect(() => {
+    if (!consultationEnded) return;
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcript]);
+  }, [consultationEnded, finalTranscript]);
 
   useEffect(() => {
     if (!consultationStarted || consultationEnded) return;
@@ -329,18 +514,16 @@ export default function AppointmentDetail() {
     if (!consultationStarted || consultationEnded) return;
     if (!appointment || !patient) return;
     if (transcript.length < 3) return;
-    if (suggestedQuestions.length > 0) return;
 
+    const requestSeq = ++suggestionsRequestSeqRef.current;
     const timer = window.setTimeout(async () => {
       const response = await fetchSuggestedQuestions({
         appointmentId: appointment.id,
         patientId: patient.id,
         transcript,
       });
-      setSuggestedQuestions((current) =>
-        current.length > 0 ? current : response.questions || []
-      );
-      setRedFlags((current) => (current.length > 0 ? current : response.redFlags || []));
+      if (requestSeq !== suggestionsRequestSeqRef.current) return;
+      applySuggestionUpdate(response.questions || [], response.redFlags || []);
     }, 1200);
 
     return () => {
@@ -352,7 +535,7 @@ export default function AppointmentDetail() {
     appointment,
     patient,
     transcript,
-    suggestedQuestions.length,
+    applySuggestionUpdate,
   ]);
 
   const startConsultation = async () => {
@@ -368,8 +551,13 @@ export default function AppointmentDetail() {
     setContextSignals([]);
     setShowPrescription(false);
     setValidated(false);
+    clearSuggestionSwapTimer();
+    queuedSuggestionsRef.current = null;
+    currentSuggestionsRef.current = { questions: [], flags: [] };
+    lastSuggestionAppliedAtRef.current = 0;
     setSuggestedQuestions([]);
     setRedFlags([]);
+    setFinalTranscript([]);
     setConsultationStarted(true);
     summaryFinalizedRef.current = false;
     clearSoapFallbackTimer();
@@ -428,8 +616,16 @@ export default function AppointmentDetail() {
         : [];
       const transcriptForSummary =
         enhancedTranscript.length > 0 ? enhancedTranscript : fallbackTranscript;
+      setFinalTranscript(transcriptForSummary);
       const soapForSummary =
-        payload?.soap && typeof payload.soap === "object" ? payload.soap : {};
+        payload && typeof payload === "object"
+          ? {
+              ...(payload.soap && typeof payload.soap === "object" ? payload.soap : {}),
+              meds_mentioned: asStringArray(payload.meds_mentioned),
+              followups: asStringArray(payload.followups),
+              safety_checks: asStringArray((payload as Record<string, unknown>).safety_checks),
+            }
+          : {};
       try {
         const result = await fetchConsultationSummary({
           appointmentId: appointment.id,
@@ -764,58 +960,76 @@ export default function AppointmentDetail() {
           <RoomAudioRenderer />
           <LiveKitTranscriptListener onTranscript={injectMessage} 
              shouldRequestEnd={endingRequested}
+             consultationContext={consultationContext}
              onSuggestions={(questions, flags) => {
-               setSuggestedQuestions(questions);
-               setRedFlags(flags);
+               applySuggestionUpdate(questions, flags);
              }}
              onSoap={(soapData) => { void handleSoap(soapData); }}
           />
-          {/* LEFT: Live Transcript */}
+          {/* LEFT: Conversation */}
           <div className="flex-1 flex flex-col border-r border-border bg-background">
             <div className="px-4 py-3 border-b border-border shrink-0 flex items-center gap-2 bg-card">
               <span className="h-2 w-2 rounded-full bg-primary" />
-              <span className="text-xs font-medium text-foreground">Live Transcript</span>
-              <span className="text-[10px] text-muted-foreground ml-auto">
-                {transcript.length} message{transcript.length !== 1 ? "s" : ""}
+              <span className="text-xs font-medium text-foreground">
+                {consultationEnded
+                  ? "Adjudicator-Corrected Conversation"
+                  : "Consultation Recording"}
               </span>
+              {consultationEnded && (
+                <span className="text-[10px] text-muted-foreground ml-auto">
+                  {finalTranscript.length} message{finalTranscript.length !== 1 ? "s" : ""}
+                </span>
+              )}
             </div>
             <ScrollArea className="flex-1 p-4">
-              <div className="space-y-2">
-                <AnimatePresence>
-                  {transcript.map((msg, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.2 }}
-                      className={`px-4 py-3 rounded-lg text-sm ${
-                        msg.speaker === "Doctor" ? "bg-[#EEF6FF]" : "bg-[#F8FAFC]"
-                      }`}
-                    >
-                      <span
-                        className={`font-semibold text-xs mr-2 ${
-                          msg.speaker === "Doctor" ? "text-primary" : "text-foreground"
+              {!consultationEnded ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center max-w-sm space-y-2">
+                    <p className="text-sm font-medium text-foreground">Recording in progress</p>
+                    <p className="text-xs text-muted-foreground">
+                      The conversation is being captured in the background and will be shown after
+                      the consultation ends.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <AnimatePresence>
+                    {finalTranscript.map((msg, i) => (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className={`px-4 py-3 rounded-lg text-sm ${
+                          msg.speaker === "Doctor" ? "bg-[#EEF6FF]" : "bg-[#F8FAFC]"
                         }`}
                       >
-                        {msg.speaker === "Doctor" ? "Dr." : "Patient"}
-                      </span>
-                      <span className="text-foreground/90">{msg.text}</span>
-                      <span className="text-[10px] text-muted-foreground ml-2">{msg.timestamp}</span>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-                {transcript.length === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-16">
-                    Waiting for conversation...
-                  </p>
-                )}
-                <div ref={transcriptEndRef} />
-              </div>
+                        <span
+                          className={`font-semibold text-xs mr-2 ${
+                            msg.speaker === "Doctor" ? "text-primary" : "text-foreground"
+                          }`}
+                        >
+                          {msg.speaker === "Doctor" ? "Dr." : "Patient"}
+                        </span>
+                        <span className="text-foreground/90">{msg.text}</span>
+                        <span className="text-[10px] text-muted-foreground ml-2">{msg.timestamp}</span>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                  {finalTranscript.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-16">
+                      No conversation transcript available.
+                    </p>
+                  )}
+                  <div ref={transcriptEndRef} />
+                </div>
+              )}
             </ScrollArea>
             {!consultationEnded && (
               <div className="p-3 border-t border-border bg-card shrink-0 flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Transcript updates are streamed by the live voice agent.
+                  Live transcript display is hidden while the appointment is recording.
                 </p>
                 <TrackToggle
                   source={Track.Source.Microphone}

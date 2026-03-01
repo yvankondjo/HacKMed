@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 import logging
@@ -506,6 +507,7 @@ class LifecycleService:
         antecedents: list[str] = []
         historical_symptoms: list[str] = []
         past_call_summaries: list[str] = []
+        history_highlights: list[str] = []
 
         detail = self.get_appointment_detail(appointment_id)
         if detail:
@@ -521,6 +523,18 @@ class LifecycleService:
                 for call in detail.calls
                 if call.summary and call.summary.strip()
             ][:4]
+            history_highlights = [
+                " - ".join(
+                    value
+                    for value in (
+                        str(item.motif or "").strip(),
+                        str(item.summary or "").strip(),
+                    )
+                    if value
+                ).strip()
+                for item in detail.history
+                if str(item.motif or "").strip() or str(item.summary or "").strip()
+            ][:4]
             if allergies:
                 context_signals.append(f"Known allergies: {', '.join(allergies)}")
             if antecedents:
@@ -528,6 +542,10 @@ class LifecycleService:
             if historical_symptoms:
                 context_signals.append(
                     f"Symptoms seen in previous calls: {', '.join(historical_symptoms[:5])}"
+                )
+            if history_highlights:
+                context_signals.append(
+                    f"Recent consultation history: {history_highlights[0][:160]}"
                 )
         else:
             patient_detail = self.get_patient_detail(patient_id)
@@ -554,6 +572,7 @@ class LifecycleService:
             "antecedents": antecedents,
             "historical_symptoms": historical_symptoms,
             "past_call_summaries": past_call_summaries,
+            "history_highlights": history_highlights,
             "context_signals": context_signals,
         }
 
@@ -596,51 +615,149 @@ class LifecycleService:
         has_red_flag = any(
             sym.lower() in {"shortness of breath", "chest pain"} for sym in detected_symptoms
         )
-
-        diagnoses: list[str] = []
-        if has_fever and has_throat:
-            diagnoses.append("Acute pharyngitis (bacterial vs viral)")
-        if has_cough and has_fever:
-            diagnoses.append("Upper respiratory tract infection")
-        if has_red_flag:
-            diagnoses.append("Requires urgent in-person assessment for red-flag symptoms")
-        diagnoses.extend(
-            [
-                "Viral syndrome",
-                "Symptomatic follow-up recommended",
-            ]
+        has_back_pain_case = _has_any(
+            combined,
+            (
+                "back pain",
+                "lower back",
+                "lumbar",
+                "lumbago",
+                "sciatica",
+                "physio",
+                "physiotherapy",
+                "physiotherapist",
+            ),
         )
-        diagnoses = _unique_compact(diagnoses)[:4]
 
         allergy_text = " ".join(context["allergies"]).lower()
         penicillin_allergy = _has_any(allergy_text, ("penicillin", "amoxicillin"))
-
-        antibiotics = (
-            {
-                "name": "Azithromycin",
-                "dosage": "500mg",
-                "frequency": "Once daily",
-                "duration": "3 days",
-            }
-            if penicillin_allergy
-            else {
-                "name": "Amoxicillin",
-                "dosage": "1g",
-                "frequency": "3 times daily",
-                "duration": "6 days",
-            }
+        nsaid_allergy = _has_any(
+            allergy_text,
+            ("aspirin", "ibuprofen", "naproxen", "nsaid", "anti inflammatory"),
         )
-        prescription = {
-            "medications": [
-                antibiotics,
+
+        # Keep clinical recommendations anchored to transcript content.
+        diagnoses: list[str] = []
+        medications: list[dict[str, str]] = []
+        additional_advice: list[str] = []
+
+        if has_back_pain_case:
+            if not any(sym.lower() == "back pain" for sym in detected_symptoms):
+                detected_symptoms.insert(0, "Back pain")
+
+            diagnoses.extend(
+                [
+                    "Mechanical low-back pain",
+                    "Lumbar strain (to confirm clinically)",
+                    "Functional limitation due to back pain",
+                ]
+            )
+            if has_red_flag:
+                diagnoses.append("Urgent in-person neurological assessment if red flags persist")
+
+            physio_sessions = 10
+            session_match = re.search(
+                r"\b(\d{1,2})\s*(?:session|sessions)\s*(?:of|with)?\s*(?:physio|physiotherapy|physiotherapist)\b",
+                combined,
+            )
+            if session_match:
+                try:
+                    physio_sessions = max(4, min(30, int(session_match.group(1))))
+                except ValueError:
+                    physio_sessions = 10
+
+            paracetamol_dose = "500 to 1000mg"
+            dose_match = re.search(
+                r"(?:paracetamol|acetaminophen|etamol)[^0-9]{0,24}(\d{2,4})\s*(?:mg|milligram)",
+                combined,
+            )
+            if dose_match:
+                try:
+                    parsed_dose = int(dose_match.group(1))
+                    if 250 <= parsed_dose <= 1500:
+                        paracetamol_dose = f"{parsed_dose}mg"
+                except ValueError:
+                    pass
+
+            paracetamol_frequency = "Every 8 hours if needed"
+            if _has_any(combined, ("twice a day", "twice daily", "2 times", "two times")):
+                paracetamol_frequency = "Twice daily if needed"
+
+            medications.append(
+                {
+                    "name": "Physiotherapy sessions",
+                    "dosage": f"{physio_sessions} sessions",
+                    "frequency": "2 sessions per week",
+                    "duration": f"{max(2, (physio_sessions + 1) // 2)} weeks",
+                }
+            )
+            medications.append(
+                {
+                    "name": "Paracetamol",
+                    "dosage": paracetamol_dose,
+                    "frequency": paracetamol_frequency,
+                    "duration": "5 to 10 days",
+                }
+            )
+            if not nsaid_allergy and _has_any(combined, ("severe pain", "can't sleep", "cannot sleep", "intense pain")):
+                medications.append(
+                    {
+                        "name": "Ibuprofen",
+                        "dosage": "400mg",
+                        "frequency": "2 to 3 times daily with meals",
+                        "duration": "3 to 5 days",
+                    }
+                )
+
+            additional_advice.extend(
+                [
+                    "Continue gentle movement and avoid heavy lifting for the next few days.",
+                    "Proceed with physiotherapy sessions and reassess pain progression weekly.",
+                    "Seek urgent care for weakness, numbness, bladder changes, or worsening pain.",
+                ]
+            )
+        else:
+            if has_fever and has_throat:
+                diagnoses.append("Acute pharyngitis (bacterial vs viral)")
+            if has_cough and has_fever:
+                diagnoses.append("Upper respiratory tract infection")
+            if has_red_flag:
+                diagnoses.append("Requires urgent in-person assessment for red-flag symptoms")
+            diagnoses.extend(
+                [
+                    "Viral syndrome",
+                    "Symptomatic follow-up recommended",
+                ]
+            )
+
+            if has_fever and has_throat:
+                medications.append(
+                    (
+                        {
+                            "name": "Azithromycin",
+                            "dosage": "500mg",
+                            "frequency": "Once daily",
+                            "duration": "3 days",
+                        }
+                        if penicillin_allergy
+                        else {
+                            "name": "Amoxicillin",
+                            "dosage": "1g",
+                            "frequency": "3 times daily",
+                            "duration": "6 days",
+                        }
+                    )
+                )
+            medications.append(
                 {
                     "name": "Paracetamol",
                     "dosage": "1000mg",
                     "frequency": "Every 6 to 8 hours if needed",
                     "duration": "3 to 5 days",
-                },
-            ],
-            "additionalAdvice": _unique_compact(
+                }
+            )
+
+            additional_advice.extend(
                 [
                     "Hydration and rest are recommended.",
                     "Return quickly if symptoms worsen.",
@@ -653,7 +770,15 @@ class LifecycleService:
                         else ""
                     ),
                 ]
-            ),
+            )
+
+        if isinstance(request.soap.get("followups"), list):
+            additional_advice.extend(str(item).strip() for item in request.soap.get("followups", []))
+
+        diagnoses = _unique_compact(diagnoses)[:4]
+        prescription = {
+            "medications": medications,
+            "additionalAdvice": _unique_compact(additional_advice),
         }
 
         summary_chunks = [
@@ -670,6 +795,8 @@ class LifecycleService:
             )
         if request.soap:
             summary_chunks.append("SOAP note from consultation agent was incorporated.")
+        if has_back_pain_case:
+            summary_chunks.append("Plan includes a musculoskeletal recovery pathway with physiotherapy.")
         summary = " ".join(summary_chunks)
 
         persisted_report = False
@@ -715,36 +842,117 @@ class LifecycleService:
     def suggest_questions(
         self, request: SuggestQuestionsRequest
     ) -> SuggestQuestionsResponse:
-        joined = " ".join(message.text.lower() for message in request.transcript)
+        context = self._load_summary_context(request.appointmentId, request.patientId)
+        appointment_detail = self.get_appointment_detail(request.appointmentId)
+        motif = (
+            (appointment_detail.appointment.motif if appointment_detail else "")
+            or ""
+        ).strip()
 
-        topics = {
-            "duration": ["since", "days", "weeks", "duration"],
-            "fever": ["fever", "temperature"],
-            "pain": ["pain", "intensity", "severity"],
-            "allergies": ["allergy", "allergies"],
-            "treatments": ["treatment", "medication", "medicine", "taken"],
-            "redflag_resp": ["shortness of breath", "dyspnea", "breathing"],
-            "redflag_chest": ["chest pain", "chest tightness"],
-            "redflag_confusion": ["confusion", "disoriented", "disorientation"],
+        doctor_text = " ".join(
+            (message.text or "").strip().lower()
+            for message in request.transcript
+            if _normalize_transcript_speaker(message.speaker) == "doctor"
+        )
+        patient_text = " ".join(
+            (message.text or "").strip().lower()
+            for message in request.transcript
+            if _normalize_transcript_speaker(message.speaker) == "patient"
+        )
+        joined = f"{doctor_text} {patient_text}".strip()
+        joined_with_motif = f"{motif.lower()} {joined}".strip()
+
+        def _mentions(keywords: tuple[str, ...], *, source: str | None = None) -> bool:
+            haystack = source if source is not None else joined_with_motif
+            return any(keyword in haystack for keyword in keywords)
+
+        topic_keywords: dict[str, tuple[str, ...]] = {
+            "duration": ("when did", "since", "started", "for two", "for three", "for one"),
+            "severity": ("0 to 10", "/10", "severity", "intensity", "how severe"),
+            "allergies": ("allergy", "allergies", "allergic"),
+            "treatments": (
+                "treatment",
+                "medication",
+                "medicine",
+                "taken",
+                "paracetamol",
+                "ibuprofen",
+                "physio",
+                "physiotherapy",
+            ),
+            "redflag_resp": ("shortness of breath", "dyspnea", "cannot breathe"),
+            "redflag_chest": ("chest pain", "chest tightness"),
+            "redflag_confusion": ("confusion", "disoriented", "disorientation"),
+            "redflag_neuro": ("numbness", "weakness", "bladder", "bowel", "saddle"),
         }
-
         asked_topics = [
             topic
-            for topic, keywords in topics.items()
-            if any(keyword in joined for keyword in keywords)
+            for topic, keywords in topic_keywords.items()
+            if _mentions(keywords)
         ]
 
         questions: list[str] = []
-        if "duration" not in asked_topics:
-            questions.append("When exactly did the symptoms start?")
-        if "fever" not in asked_topics:
-            questions.append("Have you had a fever, and what was the highest temperature?")
-        if "pain" not in asked_topics:
-            questions.append("On a scale from 0 to 10, how severe is the pain?")
+
+        def _push_question(text: str) -> None:
+            label = (text or "").strip()
+            if not label:
+                return
+            if label in questions:
+                return
+            if len(questions) >= 5:
+                return
+            questions.append(label)
+
+        is_back_pain_case = _mentions(
+            (
+                "back pain",
+                "low back",
+                "lower back",
+                "lumbar",
+                "lumbago",
+                "sciatica",
+            )
+        )
+
+        if is_back_pain_case:
+            if "duration" not in asked_topics:
+                _push_question("When exactly did this back pain episode start?")
+            if "severity" not in asked_topics:
+                _push_question("On a scale of 0 to 10, how severe is the back pain now?")
+            if not _mentions(("radiat", "leg pain", "shooting pain", "sciatica")):
+                _push_question("Does the pain radiate to one leg, or stay localized in the back?")
+            if "redflag_neuro" not in asked_topics:
+                _push_question("Any numbness, weakness, or bladder/bowel changes since the pain began?")
+            if not _mentions(("lifting", "trauma", "fall", "injury", "trigger", "after effort")):
+                _push_question("Did it begin after lifting, a fall, or another specific trigger?")
+            if "treatments" not in asked_topics:
+                _push_question("What have you already tried (paracetamol, physiotherapy, or other treatments)?")
+            if context["history_highlights"]:
+                _push_question("Compared with prior episodes, is this pain stronger or lasting longer?")
+        else:
+            if "duration" not in asked_topics:
+                _push_question("When exactly did these symptoms start?")
+            if not _mentions(("worse", "better", "improv", "stable", "evolving")):
+                _push_question("Are symptoms improving, stable, or getting worse?")
+            if "severity" not in asked_topics and _mentions(("pain", "ache", "hurts")):
+                _push_question("On a scale of 0 to 10, how severe is the pain right now?")
+            if "treatments" not in asked_topics:
+                _push_question("Have you already taken any treatment for this issue?")
+
         if "allergies" not in asked_topics:
-            questions.append("Do you have any known medication allergies?")
-        if "treatments" not in asked_topics:
-            questions.append("Have you already taken any treatment for this issue?")
+            if context["allergies"]:
+                _push_question(
+                    f"Can you confirm medication allergies before prescribing ({', '.join(context['allergies'][:2])})?"
+                )
+            else:
+                _push_question("Do you have any known medication allergies?")
+
+        if context["antecedents"] and not _mentions(("medical history", "chronic", "antecedent", "baseline")):
+            history_hint = str(context["antecedents"][0]).strip()[:60]
+            if history_hint:
+                _push_question(
+                    f"Any recent change in your baseline condition related to {history_hint}?"
+                )
 
         red_flags: list[str] = []
         if "redflag_resp" in asked_topics:
@@ -753,9 +961,11 @@ class LifecycleService:
             red_flags.append("Chest pain mentioned")
         if "redflag_confusion" in asked_topics:
             red_flags.append("Confusion mentioned")
+        if is_back_pain_case and "redflag_neuro" in asked_topics:
+            red_flags.append("Neurological red flag terms mentioned for back pain")
 
         if not questions:
-            questions.append("Are the symptoms improving, stable, or getting worse?")
+            questions.append("Are symptoms improving, stable, or getting worse?")
 
         result = SuggestQuestionsResponse(
             questions=questions[:5],

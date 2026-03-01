@@ -78,7 +78,13 @@ def _extract_job_metadata(ctx: JobContext) -> dict[str, Any]:
 
 def _build_stt():
     language = (os.getenv("OUTBOUND_STT_LANGUAGE") or os.getenv("STT_LANGUAGE") or "en").strip()
-    domain = (os.getenv("OUTBOUND_STT_DOMAIN") or os.getenv("STT_DOMAIN") or "medical").strip().lower()
+    configured_domain = (os.getenv("OUTBOUND_STT_DOMAIN") or os.getenv("STT_DOMAIN") or "medical").strip().lower()
+    domain = "medical"
+    if configured_domain and configured_domain != "medical":
+        logger.warning(
+            "OUTBOUND_STT_DOMAIN=%s requested, but outbound caller is configured for Speechmatics medical domain only.",
+            configured_domain,
+        )
     operating_point = (os.getenv("OUTBOUND_STT_OPERATING_POINT") or os.getenv("STT_OPERATING_POINT") or "enhanced").strip().lower()
     max_delay = _read_float_env("OUTBOUND_STT_MAX_DELAY", 0.7)
     silence_trigger = _read_float_env("OUTBOUND_EOU_SILENCE", 0.35)
@@ -88,7 +94,7 @@ def _build_stt():
         attempts: list[dict[str, Any]] = [
             {**lang_kwargs, "domain": domain, "operating_point": operating_point, "max_delay": max_delay, "end_of_utterance_silence_trigger": silence_trigger},
             {**lang_kwargs, "domain": domain, "operating_point": operating_point},
-            dict(lang_kwargs),
+            {**lang_kwargs, "domain": domain},
         ]
         for kwargs in attempts:
             try:
@@ -96,13 +102,41 @@ def _build_stt():
                 return stt
             except TypeError:
                 continue
-    return speechmatics.STT()
+    raise RuntimeError(
+        "Speechmatics STT medical domain is required but unsupported in this SDK version."
+    )
 
 
 def _build_tts():
+    provider = (os.getenv("TTS_PROVIDER") or "speechmatics").strip().lower()
+    if provider and provider != "speechmatics":
+        logger.warning(
+            "TTS_PROVIDER=%s requested, but outbound caller is configured for Speechmatics TTS only.",
+            provider,
+        )
+    speechmatics_tts = getattr(speechmatics, "TTS", None)
+    if speechmatics_tts:
+        voice = (os.getenv("SPEECHMATICS_VOICE") or "megan").strip() or "megan"
+        return speechmatics_tts(voice=voice)
+
+    strict_tts = (os.getenv("SPEECHMATICS_TTS_REQUIRED", "false") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if strict_tts:
+        raise RuntimeError(
+            "Speechmatics TTS is required but unavailable in this SDK version."
+        )
+
+    logger.warning(
+        "Speechmatics TTS is unavailable in this SDK version; falling back to OpenAI TTS. "
+        "Set SPEECHMATICS_TTS_REQUIRED=true to fail fast."
+    )
     model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
     voice = os.getenv("OPENAI_TTS_VOICE", "ash")
-    speed = _read_float_env("OPENAI_TTS_SPEED", 1.18)
+    speed = _read_float_env("OPENAI_TTS_SPEED", 1.0)
     try:
         return openai.TTS(model=model, voice=voice, speed=speed)
     except TypeError:
@@ -203,7 +237,11 @@ def _build_instructions(metadata: dict[str, Any], state: OutboundCallState) -> s
     return (
         "You are MedVoice Care Connect, a clinical follow-up voice assistant.\n"
         "Speak naturally and briefly, one question at a time.\n"
-        "Language: respond in the caller language, default to English.\n"
+        "Language policy: conduct this call in English only.\n"
+        "If the caller speaks another language, say exactly: "
+        "\"Sorry, I can continue only in English. Could you please speak English?\"\n"
+        "If the caller still does not speak English after 2 reminders, close politely with: "
+        "\"I'm sorry, I can't continue this call in another language. Thank you for understanding. Goodbye.\"\n"
         "Goal: run a post-consultation follow-up call for medication adherence and safety.\n"
         f"Doctor: {state.doctor_name}\n"
         f"Patient: {state.patient_name}\n"

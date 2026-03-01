@@ -186,8 +186,9 @@ def load_agent_prompt() -> str:
         return agent_file.read_text(encoding="utf-8")
     return (
         "You are MedVoice's clinical voice assistant. "
-        "Always respond in English, ask one concise medical intake question at a time, "
-        "and escalate urgent red-flag symptoms immediately."
+        "Always respond in English. If the caller speaks another language, ask them to switch to English: "
+        "\"Sorry, I can continue only in English. Could you please speak English?\" "
+        "Ask one concise medical intake question at a time, and escalate urgent red-flag symptoms immediately."
     )
 
 
@@ -198,8 +199,16 @@ def load_welcome_message() -> str:
 
 def build_stt():
     language = os.getenv("STT_LANGUAGE", "en").strip()
-    domain = (os.getenv("STT_DOMAIN", "medical") or "").strip().lower()
+    configured_domain = (os.getenv("STT_DOMAIN", "medical") or "").strip().lower()
+    domain = "medical"
+    if configured_domain and configured_domain != "medical":
+        logger.warning(
+            "STT_DOMAIN=%s requested, but this agent is configured for Speechmatics medical domain only.",
+            configured_domain,
+        )
     operating_point = (os.getenv("STT_OPERATING_POINT", "enhanced") or "").strip().lower()
+    max_delay = read_float_env("STT_MAX_DELAY", 0.7)
+    silence_trigger = read_float_env("STT_EOU_SILENCE", 0.35)
 
     # Speechmatics plugin argument names can vary across SDK versions.
     # Try medical+enhanced first, then progressively relax to stay compatible.
@@ -210,14 +219,19 @@ def build_stt():
         language_kwargs = [{}]
 
     for lang_kwargs in language_kwargs:
-        attempts: list[dict[str, str]] = []
-        if domain and operating_point:
-            attempts.append({**lang_kwargs, "domain": domain, "operating_point": operating_point})
-        if domain:
-            attempts.append({**lang_kwargs, "domain": domain})
+        attempts: list[dict[str, str | float]] = []
         if operating_point:
-            attempts.append({**lang_kwargs, "operating_point": operating_point})
-        attempts.append(dict(lang_kwargs))
+            attempts.append(
+                {
+                    **lang_kwargs,
+                    "domain": domain,
+                    "operating_point": operating_point,
+                    "max_delay": max_delay,
+                    "end_of_utterance_silence_trigger": silence_trigger,
+                }
+            )
+            attempts.append({**lang_kwargs, "domain": domain, "operating_point": operating_point})
+        attempts.append({**lang_kwargs, "domain": domain})
 
         for kwargs in attempts:
             try:
@@ -226,31 +240,46 @@ def build_stt():
                 continue
 
     logger.warning(
-        "speechmatics.STT in this SDK version does not accept language/domain/operating_point overrides; "
-        "falling back to default STT settings."
+        "speechmatics.STT in this SDK version does not accept medical-domain overrides."
     )
-    return speechmatics.STT()
+    raise RuntimeError(
+        "Speechmatics STT medical domain is required but unsupported in this SDK version."
+    )
 
 
 def build_tts():
-    provider = os.getenv("TTS_PROVIDER", "openai").strip().lower()
-    if provider == "speechmatics":
-        speechmatics_tts = getattr(speechmatics, "TTS", None)
-        if speechmatics_tts:
-            voice = os.getenv("SPEECHMATICS_VOICE", "megan")
-            return speechmatics_tts(voice=voice)
-        logger.warning("speechmatics.TTS is unavailable in this SDK version; falling back to OpenAI TTS.")
+    provider = os.getenv("TTS_PROVIDER", "speechmatics").strip().lower()
+    if provider and provider != "speechmatics":
+        logger.warning(
+            "TTS_PROVIDER=%s requested, but this agent is configured for Speechmatics TTS only.",
+            provider,
+        )
+    speechmatics_tts = getattr(speechmatics, "TTS", None)
+    if speechmatics_tts:
+        voice = os.getenv("SPEECHMATICS_VOICE", "megan")
+        return speechmatics_tts(voice=voice)
 
+    strict_tts = (os.getenv("SPEECHMATICS_TTS_REQUIRED", "false") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if strict_tts:
+        raise RuntimeError(
+            "Speechmatics TTS is required but unavailable in this SDK version."
+        )
+
+    logger.warning(
+        "Speechmatics TTS is unavailable in this SDK version; falling back to OpenAI TTS. "
+        "Set SPEECHMATICS_TTS_REQUIRED=true to fail fast."
+    )
     model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
     voice = os.getenv("OPENAI_TTS_VOICE", "ash")
-    speed = read_float_env("OPENAI_TTS_SPEED", 1.25)
+    speed = read_float_env("OPENAI_TTS_SPEED", 1.0)
     try:
         return openai.TTS(model=model, voice=voice, speed=speed)
     except TypeError:
-        logger.warning(
-            "openai.TTS in this SDK version has no speed argument; "
-            "falling back without speed override."
-        )
         return openai.TTS(model=model, voice=voice)
 
 

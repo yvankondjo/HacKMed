@@ -60,6 +60,7 @@ SPEAKER_ROLE_MAP: dict[str, str] = {
 _SPEAKER_TAG_RE = re.compile(r"<(S\d+)>(.*?)</\1>", re.DOTALL)
 _DOCTOR_ROLE_RE = re.compile(r"(?:^|[^a-z])(doc|doctor|dr|physician|medic|clinician)(?:[^a-z]|$)")
 _PATIENT_ROLE_RE = re.compile(r"(?:^|[^a-z])(patient|pat|caller)(?:[^a-z]|$)")
+_WORD_RE = re.compile(r"[a-z0-9']+")
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -139,6 +140,29 @@ def _infer_participant_role(participant: rtc.RemoteParticipant) -> str:
     return "unknown"
 
 
+def _word_count(text: str) -> int:
+    return len(_WORD_RE.findall((text or "").lower()))
+
+
+def _is_filler_only(text: str) -> bool:
+    tokens = _WORD_RE.findall((text or "").lower())
+    if not tokens:
+        return True
+    fillers = {
+        "uh",
+        "um",
+        "hmm",
+        "mm",
+        "ah",
+        "oh",
+        "er",
+        "huh",
+        "uhh",
+        "umm",
+    }
+    return all(token in fillers for token in tokens)
+
+
 def _build_consultation_stt(*, enable_diarization_override: bool | None = None):
     language = (SCRIBE_LANGUAGE or "").strip()
     domain = (os.getenv("CONSULTATION_STT_DOMAIN") or os.getenv("STT_DOMAIN") or "medical").strip().lower()
@@ -152,9 +176,11 @@ def _build_consultation_stt(*, enable_diarization_override: bool | None = None):
         else enable_diarization_default
     )
     include_partials = _read_bool_env("CONSULTATION_INCLUDE_PARTIALS", False)
-    max_delay = _read_float_env("CONSULTATION_STT_MAX_DELAY", 0.9)
+    # Slightly higher delay improves phrase completeness and reduces tiny fragments.
+    max_delay = _read_float_env("CONSULTATION_STT_MAX_DELAY", 1.1)
     diarization_sensitivity = _read_float_env("CONSULTATION_DIARIZATION_SENSITIVITY", 0.75)
-    end_of_utterance_silence_trigger = _read_float_env("CONSULTATION_EOU_SILENCE_TRIGGER", 0.4)
+    # Wait a bit longer before cutting the utterance to improve readability.
+    end_of_utterance_silence_trigger = _read_float_env("CONSULTATION_EOU_SILENCE_TRIGGER", 0.6)
     prefer_current_speaker = _read_bool_env("CONSULTATION_PREFER_CURRENT_SPEAKER", False)
     speaker_active_format = (
         os.getenv("CONSULTATION_SPEAKER_ACTIVE_FORMAT", "<{speaker_id}>{text}</{speaker_id}>") or ""
@@ -292,6 +318,7 @@ class ClinicScribeManager:
 
         self._turns: list[Turn] = []
         self._roles: dict[str, str] = {}
+        self._context: dict[str, Any] = {}
 
         # Use LiveKit inference or direct OpenAI if configured
         import livekit.plugins.openai as openai_plugin
@@ -305,11 +332,148 @@ class ClinicScribeManager:
         self._adjudication_cache_turn_count = 0
         self._adjudication_cache: list[Turn] | None = None
         self._adjudication_lock = asyncio.Lock()
+        self._finalize_lock = asyncio.Lock()
+        self._soap_published = False
 
         self._suggest_task: asyncio.Task | None = None
         self._suggest_delay_s = 2.0
 
         self._active_text_tasks: set[asyncio.Task] = set()
+
+    @staticmethod
+    def _context_list(value: Any, *, limit: int = 4, max_chars: int = 180) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items: list[str] = []
+        for raw in value:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            items.append(text[:max_chars])
+            if len(items) >= limit:
+                break
+        return items
+
+    def _format_context_for_prompt(self, *, max_chars: int = 1600) -> str:
+        if not isinstance(self._context, dict) or not self._context:
+            return ""
+
+        lines: list[str] = []
+        motif = str(self._context.get("appointment_motif") or "").strip()
+        patient_name = str(self._context.get("patient_name") or "").strip()
+        patient_age = self._context.get("patient_age")
+        if motif:
+            lines.append(f"- Visit reason: {motif}")
+        if patient_name:
+            lines.append(f"- Patient: {patient_name}")
+        if isinstance(patient_age, (int, float)) and patient_age > 0:
+            lines.append(f"- Patient age: {int(patient_age)}")
+
+        allergies = self._context_list(self._context.get("allergies"), limit=6, max_chars=80)
+        antecedents = self._context_list(self._context.get("antecedents"), limit=6, max_chars=120)
+        history = self._context_list(self._context.get("history_highlights"), limit=4, max_chars=220)
+        recent_calls = self._context_list(
+            self._context.get("recent_call_highlights"), limit=4, max_chars=220
+        )
+
+        if allergies:
+            lines.append(f"- Known allergies: {', '.join(allergies)}")
+        if antecedents:
+            lines.append(f"- Known medical history: {', '.join(antecedents)}")
+        if history:
+            lines.append("- Past appointments:")
+            lines.extend(f"  - {item}" for item in history)
+        if recent_calls:
+            lines.append("- Recent follow-up/call notes:")
+            lines.extend(f"  - {item}" for item in recent_calls)
+
+        if not lines:
+            return ""
+        blob = "\n".join(lines)
+        return blob[:max_chars]
+
+    @staticmethod
+    def _merge_turn_text(previous: str, current: str) -> str:
+        left = (previous or "").strip()
+        right = (current or "").strip()
+        if not left:
+            return right
+        if not right:
+            return left
+        combined = f"{left} {right}".strip()
+        return re.sub(r"\s+([,.;:?!])", r"\1", combined)
+
+    @staticmethod
+    def _should_merge_turn_text(previous: str, current: str, *, short_chars: int) -> bool:
+        left = (previous or "").strip()
+        right = (current or "").strip()
+        if not left or not right:
+            return False
+        if len(left) <= short_chars or len(right) <= short_chars:
+            return True
+        if left[-1] not in ".?!":
+            return True
+        if right and right[0].islower():
+            return True
+        if _word_count(right) <= 3:
+            return True
+        return False
+
+    def _compact_turns(self, turns: list[Turn]) -> list[Turn]:
+        if len(turns) < 2:
+            return list(turns)
+
+        # More permissive defaults reduce over-fragmented transcript lines.
+        merge_window = max(0.2, _read_float_env("CONSULTATION_MERGE_WINDOW_SECONDS", 2.2))
+        short_chars = max(6, _read_int_env("CONSULTATION_MERGE_SHORT_CHARS", 60))
+        max_combined_chars = max(80, _read_int_env("CONSULTATION_MERGE_MAX_CHARS", 420))
+
+        compacted: list[Turn] = []
+        for turn in turns:
+            text = (turn.text or "").strip()
+            if not text:
+                continue
+
+            if not compacted:
+                compacted.append(
+                    Turn(ts=turn.ts, speaker=turn.speaker, text=text, speaker_id=turn.speaker_id)
+                )
+                continue
+
+            previous = compacted[-1]
+            same_speaker = previous.speaker == turn.speaker
+            same_tag = (
+                previous.speaker_id == turn.speaker_id
+                or not previous.speaker_id
+                or not turn.speaker_id
+            )
+            same_second = int(turn.ts) == int(previous.ts)
+            close_enough = same_second or (turn.ts - previous.ts) <= merge_window
+            combined_len = len(previous.text) + 1 + len(text)
+            should_merge_by_text = same_second or self._should_merge_turn_text(
+                previous.text,
+                text,
+                short_chars=short_chars,
+            )
+
+            if (
+                same_speaker
+                and same_tag
+                and close_enough
+                and combined_len <= max_combined_chars
+                and should_merge_by_text
+            ):
+                previous.text = self._merge_turn_text(previous.text, text)
+                previous.ts = turn.ts
+                if not previous.speaker_id:
+                    previous.speaker_id = turn.speaker_id
+                continue
+
+            compacted.append(
+                Turn(ts=turn.ts, speaker=turn.speaker, text=text, speaker_id=turn.speaker_id)
+            )
+
+        return compacted
 
     def start(self):
         self.room.on("participant_connected", self.on_participant_connected)
@@ -508,7 +672,7 @@ class ClinicScribeManager:
     async def on_final_transcript(self, speaker_identity: str, text: str):
         participant_role = self._roles.get(speaker_identity, "unknown")
         use_diarization = self._session_uses_diarization.get(speaker_identity, False)
-        min_chars = max(1, int(_read_float_env("CONSULTATION_MIN_TEXT_CHARS", 3)))
+        min_chars = max(1, int(_read_float_env("CONSULTATION_MIN_TEXT_CHARS", 5)))
         include_other_speaker = _read_bool_env("CONSULTATION_INCLUDE_OTHER_SPEAKER", False)
         single_tag_heuristic = _read_bool_env("CONSULTATION_SINGLE_TAG_ROLE_HEURISTIC", True)
         override_delta = max(1, int(_read_float_env("CONSULTATION_SINGLE_TAG_OVERRIDE_DELTA", 2)))
@@ -535,17 +699,27 @@ class ClinicScribeManager:
 
             role = "unknown"
             has_patient_tag = False
+            existing_tag_role: str | None = None
             if use_diarization and speaker_id:
+                tag_roles = self._diarization_tag_roles.setdefault(speaker_identity, {})
+                existing_tag_role = tag_roles.get(speaker_id)
                 role = self._resolve_diarized_role(speaker_identity, participant_role, speaker_id)
-                tag_roles = self._diarization_tag_roles.get(speaker_identity, {})
                 has_patient_tag = "patient" in tag_roles.values()
 
                 if single_tag_heuristic:
-                    if not has_patient_tag:
+                    if existing_tag_role is None and not has_patient_tag:
                         role = heuristic_role
-                    elif role == "doctor" and role_delta >= override_delta:
+                    elif (
+                        existing_tag_role is None
+                        and role == "doctor"
+                        and role_delta >= override_delta
+                    ):
                         role = "patient"
-                    elif role == "patient" and role_delta <= -override_delta:
+                    elif (
+                        existing_tag_role is None
+                        and role == "patient"
+                        and role_delta <= -override_delta
+                    ):
                         role = heuristic_role
             if role == "unknown":
                 role = participant_role
@@ -553,8 +727,16 @@ class ClinicScribeManager:
                 role = SPEAKER_ROLE_MAP.get(speaker_id, "unknown")
             if role == "unknown":
                 role = "patient"
+            if role == "other" and include_other_speaker:
+                role = heuristic_role if heuristic_role in {"doctor", "patient"} else "patient"
             if role == "other" and not include_other_speaker:
-                if not has_patient_tag:
+                if (
+                    heuristic_role in {"doctor", "patient"}
+                    and _word_count(clean_text) >= 2
+                    and not _is_filler_only(clean_text)
+                ):
+                    role = heuristic_role
+                elif not has_patient_tag:
                     role = heuristic_role
                 else:
                     logger.info(
@@ -611,10 +793,12 @@ class ClinicScribeManager:
             logger.exception("Suggestion generation failed: %s", e)
 
     async def _generate_questions_payload(self) -> dict[str, Any]:
-        if len(self._turns) < 2:
+        recent_turns = self._compact_turns(self._turns[-30:])
+        if len(recent_turns) < 2:
             return {"type": "suggestions", "questions": [], "missing_info": []}
 
-        recent = self._format_turns(self._turns[-14:], max_chars=4000)
+        recent = self._format_turns(recent_turns[-14:], max_chars=4000)
+        context_block = self._format_context_for_prompt(max_chars=1600)
 
         system = (
             "You are an assistant helping a physician during a consultation.\\n"
@@ -622,11 +806,17 @@ class ClinicScribeManager:
             "Rules:\\n"
             "- Do NOT diagnose.\\n"
             "- Do NOT recommend medication.\\n"
+            "- Prioritize questions that close missing clinical information based on transcript and history.\\n"
             "- Keep it concise.\\n"
             "- Return STRICT JSON with keys: questions (array of strings), missing_info (array of strings).\\n"
         )
 
-        user = f"Conversation so far:\\n{recent}\\n\\nReturn JSON."
+        user_parts = []
+        if context_block:
+            user_parts.append(f"Patient context:\\n{context_block}")
+        user_parts.append(f"Conversation so far:\\n{recent}")
+        user_parts.append("Return JSON.")
+        user = "\\n\\n".join(user_parts)
 
         chat = llm.ChatContext()
         chat.add_message(role="system", content=system)
@@ -724,10 +914,11 @@ class ClinicScribeManager:
 
         system = (
             "You are a medical transcript adjudicator. "
-            "Given noisy ASR turns, relabel speaker roles and lightly clean wording. "
+            "Given noisy ASR turns, relabel speaker roles and rewrite each turn into clean, concise spoken English. "
             "Return STRICT JSON with key 'turns'. Each item must include: "
             "idx (int), speaker ('doctor'|'patient'|'other'), text (string), drop (bool), confidence (0..1). "
-            "Rules: do not invent facts, keep medical meaning, keep text concise, and keep chronology."
+            "Rules: do not invent facts, keep medical meaning, remove filler/stutter/repetition, "
+            "fix broken grammar from ASR, and keep chronology."
         )
         user = (
             "Input turns JSON:\\n"
@@ -766,6 +957,8 @@ class ClinicScribeManager:
             confidence_raw = item.get("confidence")
             confidence = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else 0.5
             cleaned_text = str(item.get("text") or "").strip() or original.text
+            if _is_filler_only(cleaned_text):
+                continue
             if drop and confidence >= 0.6:
                 continue
             updated.append(
@@ -779,6 +972,8 @@ class ClinicScribeManager:
 
         if len(updated) < max(2, len(turns) // 2):
             return turns
+
+        updated = self._compact_turns(updated)
 
         if preserve_all or max_chars is None or max_chars <= 0:
             return updated
@@ -796,18 +991,19 @@ class ClinicScribeManager:
         return budgeted if budgeted else updated
 
     async def _adjudicate_full_dialogue(self) -> list[Turn]:
-        if not self._turns:
+        compacted_turns = self._compact_turns(list(self._turns))
+        if not compacted_turns:
             return []
-        if not self._adjudication_enabled or len(self._turns) < self._adjudication_min_turns:
-            return list(self._turns)
+        if not self._adjudication_enabled or len(compacted_turns) < self._adjudication_min_turns:
+            return compacted_turns
 
         chunk_turns = max(10, _read_int_env("CONSULTATION_LLM_ADJUDICATION_CHUNK_TURNS", 40))
         chunk_max_chars = max(4000, _read_int_env("CONSULTATION_LLM_ADJUDICATION_CHUNK_MAX_CHARS", 20000))
         adjudicated_all: list[Turn] = []
 
         async with self._adjudication_lock:
-            for idx in range(0, len(self._turns), chunk_turns):
-                chunk = self._turns[idx : idx + chunk_turns]
+            for idx in range(0, len(compacted_turns), chunk_turns):
+                chunk = compacted_turns[idx : idx + chunk_turns]
                 adjudicated_chunk = await self._adjudicate_turns(
                     chunk,
                     max_chars=chunk_max_chars,
@@ -818,7 +1014,7 @@ class ClinicScribeManager:
             self._adjudication_cache_turn_count = len(self._turns)
             self._adjudication_last_run_at = time.time()
 
-        return adjudicated_all if adjudicated_all else list(self._turns)
+        return adjudicated_all if adjudicated_all else compacted_turns
 
     async def finalize_and_send_soap(self):
         turns_for_prompt = await self._adjudicate_full_dialogue()
@@ -872,7 +1068,19 @@ class ClinicScribeManager:
 
                 if mtype == "end_session":
                     logger.info("Received end_session from %s", participant_identity)
-                    await self.finalize_and_send_soap()
+                    if self._soap_published:
+                        return
+                    async with self._finalize_lock:
+                        if self._soap_published:
+                            return
+                        grace_seconds = max(
+                            0.0,
+                            _read_float_env("CONSULTATION_FINALIZE_GRACE_SECONDS", 1.0),
+                        )
+                        if grace_seconds > 0:
+                            await asyncio.sleep(grace_seconds)
+                        await self.finalize_and_send_soap()
+                        self._soap_published = True
 
                 elif mtype == "set_role":
                     identity = msg.get("identity")
@@ -883,6 +1091,17 @@ class ClinicScribeManager:
                         self._adjudication_cache = None
                         self._adjudication_cache_turn_count = 0
                         logger.info("Role updated: %s -> %s", identity, normalized)
+
+                elif mtype == "set_context":
+                    context_payload = msg.get("context")
+                    if isinstance(context_payload, dict):
+                        self._context = context_payload
+                        logger.info(
+                            "Consultation context updated from %s (keys=%s)",
+                            participant_identity,
+                            ",".join(sorted(context_payload.keys())),
+                        )
+                        self._trigger_suggestions()
 
             except Exception as e:
                 logger.exception("control handler failed: %s", e)

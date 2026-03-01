@@ -126,11 +126,13 @@ const demoScenarios: DemoScenario[] = [
     detectedSymptoms: ["Low-back pain", "Radiation to leg", "Functional limitation"],
     diagnoses: ["Lumbar strain", "Lumbosciatica", "Disc herniation (to evaluate)"],
     medications: [
-      { name: "Ibuprofen", dosage: "400 mg", frequency: "3 times daily with meals", duration: "5 days" },
+      { name: "Physiotherapy sessions", dosage: "10 sessions", frequency: "2 sessions per week", duration: "5 weeks" },
       { name: "Paracetamol", dosage: "1000 mg", frequency: "Every 8h as needed", duration: "5 days" },
+      { name: "Ibuprofen", dosage: "400 mg", frequency: "3 times daily with meals", duration: "5 days" },
     ],
     additionalAdvice: [
       "Relative rest for 24-48h then progressive mobility.",
+      "Start physiotherapy quickly and continue as prescribed.",
       "Avoid heavy lifting until pain improves.",
       "Urgent reassessment for weakness, saddle anesthesia, or bladder/bowel changes.",
     ],
