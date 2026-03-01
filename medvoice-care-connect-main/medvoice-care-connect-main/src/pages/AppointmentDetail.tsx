@@ -71,19 +71,30 @@ function LiveKitTranscriptListener({
   useEffect(() => {
     if (!room) return;
 
+    // Parse diarization tags: <S1>text</S1> → Doctor, <S2>text</S2> → Patient
+    const parseSpeakerTag = (raw: string): { role: "Doctor" | "Patient"; text: string } => {
+      const match = raw.match(/^<(S\d+)>(.*?)<\/\1>$/s);
+      if (match) {
+        const speakerId = match[1];
+        const cleanText = match[2].trim();
+        // S1 = Doctor (primary speaker), S2 = Patient
+        return { role: speakerId === "S1" ? "Doctor" : "Patient", text: cleanText };
+      }
+      return { role: "Patient", text: raw.trim() };
+    };
+
     const handleTranscription = (
       segments: TranscriptionSegment[],
-      participant?: any,
-      publication?: any
+      _participant?: any,
+      _publication?: any
     ) => {
       segments.forEach((segment) => {
-        if (segment.final) {
-          const speakerName = participant?.name || participant?.identity || "Patient";
-          const speakerRole = speakerName.toLowerCase().includes("doc") ? "Doctor" : "Patient";
+        if (segment.final && segment.text.trim()) {
+          const { role, text: cleanText } = parseSpeakerTag(segment.text);
           
           onTranscript({
-            speaker: speakerRole,
-            text: segment.text,
+            speaker: role,
+            text: cleanText,
             timestamp: format(new Date(), "HH:mm:ss"),
           });
         }
@@ -101,7 +112,14 @@ function LiveKitTranscriptListener({
       
       try {
         const msg = JSON.parse(text);
-        if (topic === "clinic.suggestions") {
+        if (topic === "clinic.transcript") {
+          // Pre-parsed transcript from the agent with speaker role already determined
+          onTranscript({
+            speaker: msg.speaker === "Doctor" ? "Doctor" : "Patient",
+            text: msg.text,
+            timestamp: format(new Date(), "HH:mm:ss"),
+          });
+        } else if (topic === "clinic.suggestions") {
           onSuggestions(msg.questions || [], msg.missing_info || []);
         } else if (topic === "clinic.soap") {
           onSoap(msg);
