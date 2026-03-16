@@ -74,11 +74,11 @@ export interface PastAppointment {
 export const patients: Patient[] = [
   {
     id: "1",
-    firstName: "Marie",
-    lastName: "Dupont",
+    firstName: "Alice",
+    lastName: "Example",
     dateOfBirth: "1978-06-15",
-    phone: "06 12 34 56 78",
-    email: "marie.dupont@email.com",
+    phone: "06 00 00 00 01",
+    email: "alice.example@example.test",
     bloodType: "A+",
     allergies: ["Penicillin", "Peanuts"],
     antecedents: [
@@ -90,22 +90,22 @@ export const patients: Patient[] = [
   },
   {
     id: "2",
-    firstName: "Jean",
-    lastName: "Martin",
+    firstName: "Bruno",
+    lastName: "Sample",
     dateOfBirth: "1985-03-22",
-    phone: "06 98 76 54 32",
-    email: "jean.martin@email.com",
+    phone: "06 00 00 00 02",
+    email: "bruno.sample@example.test",
     bloodType: "O-",
     allergies: ["Aspirin"],
     antecedents: ["Chronic asthma (since 2010)", "Left ankle sprain (2018)"],
   },
   {
     id: "3",
-    firstName: "Sophie",
-    lastName: "Bernard",
+    firstName: "Chloe",
+    lastName: "Demo",
     dateOfBirth: "1992-11-08",
-    phone: "06 55 44 33 22",
-    email: "sophie.bernard@email.com",
+    phone: "06 00 00 00 03",
+    email: "chloe.demo@example.test",
     bloodType: "B+",
     allergies: [],
     antecedents: ["Chronic migraine (since 2020)"],
@@ -120,10 +120,10 @@ export const appointments: Appointment[] = [
   {
     id: "1",
     patientId: "1",
-    patientName: "Marie Dupont",
+    patientName: "Alice Example",
     date: today,
     time: "09:00",
-    doctor: "Dr. Laurent Martin",
+    doctor: "Dr. Alex Care",
     doctorSpecialty: "General practitioner",
     motif: "Blood pressure follow-up",
     status: "done",
@@ -133,10 +133,10 @@ export const appointments: Appointment[] = [
   {
     id: "2",
     patientId: "2",
-    patientName: "Jean Martin",
+    patientName: "Bruno Sample",
     date: today,
     time: "10:30",
-    doctor: "Dr. Laurent Martin",
+    doctor: "Dr. Alex Care",
     doctorSpecialty: "General practitioner",
     motif: "Recurrent asthma flare",
     status: "upcoming",
@@ -146,10 +146,10 @@ export const appointments: Appointment[] = [
   {
     id: "3",
     patientId: "3",
-    patientName: "Sophie Bernard",
+    patientName: "Chloe Demo",
     date: today,
     time: "11:30",
-    doctor: "Dr. Laurent Martin",
+    doctor: "Dr. Alex Care",
     doctorSpecialty: "General practitioner",
     motif: "Persistent migraines",
     status: "upcoming",
@@ -159,10 +159,10 @@ export const appointments: Appointment[] = [
   {
     id: "4",
     patientId: "1",
-    patientName: "Marie Dupont",
+    patientName: "Alice Example",
     date: today,
     time: "14:00",
-    doctor: "Dr. Laurent Martin",
+    doctor: "Dr. Alex Care",
     doctorSpecialty: "General practitioner",
     motif: "Persistent cough",
     status: "upcoming",
@@ -172,10 +172,10 @@ export const appointments: Appointment[] = [
   {
     id: "5",
     patientId: "2",
-    patientName: "Jean Martin",
+    patientName: "Bruno Sample",
     date: today,
     time: "15:30",
-    doctor: "Dr. Laurent Martin",
+    doctor: "Dr. Alex Care",
     doctorSpecialty: "General practitioner",
     motif: "Low back pain",
     status: "upcoming",
@@ -188,16 +188,16 @@ export const appointments: Appointment[] = [
 
 export const pastAppointments: Record<string, PastAppointment[]> = {
   "1": [
-    { date: "2026-02-15", motif: "Prescription renewal", doctor: "Dr. Martin", summary: "Hypertension treatment renewed. Stable outcomes." },
-    { date: "2026-01-20", motif: "Chest pain", doctor: "Dr. Martin", summary: "Cardiac workup normal. Stress identified as likely cause." },
-    { date: "2025-11-10", motif: "Annual checkup", doctor: "Dr. Martin", summary: "Complete blood panel performed. Mildly elevated cholesterol." },
+    { date: "2026-02-15", motif: "Prescription renewal", doctor: "Dr. Care", summary: "Hypertension treatment renewed. Stable outcomes." },
+    { date: "2026-01-20", motif: "Chest pain", doctor: "Dr. Care", summary: "Cardiac workup normal. Stress identified as likely cause." },
+    { date: "2025-11-10", motif: "Annual checkup", doctor: "Dr. Care", summary: "Complete blood panel performed. Mildly elevated cholesterol." },
   ],
   "2": [
-    { date: "2026-02-01", motif: "Asthma flare", doctor: "Dr. Martin", summary: "Moderate flare. Ventoline dosage adjusted." },
-    { date: "2025-12-15", motif: "Respiratory review", doctor: "Dr. Martin", summary: "Pulmonary function tests stable. Maintenance therapy continued." },
+    { date: "2026-02-01", motif: "Asthma flare", doctor: "Dr. Care", summary: "Moderate flare. Ventoline dosage adjusted." },
+    { date: "2025-12-15", motif: "Respiratory review", doctor: "Dr. Care", summary: "Pulmonary function tests stable. Maintenance therapy continued." },
   ],
   "3": [
-    { date: "2026-01-28", motif: "Migraine review", doctor: "Dr. Martin", summary: "Sumatriptan prescribed. Attack diary maintained." },
+    { date: "2026-01-28", motif: "Migraine review", doctor: "Dr. Care", summary: "Sumatriptan prescribed. Attack diary maintained." },
   ],
 };
 
@@ -247,8 +247,8 @@ export const mockAIPrescription: Prescription = {
 };
 
 export const notifications: Notification[] = [
-  { id: "1", type: "reminder", message: "Appointment with Marie Dupont in 30 min", date: today, read: false },
-  { id: "2", type: "alert", message: "Jean Martin lab result available", date: today, read: false },
+  { id: "1", type: "reminder", message: "Appointment with Alice Example in 30 min", date: today, read: false },
+  { id: "2", type: "alert", message: "Bruno Sample lab result available", date: today, read: false },
   { id: "3", type: "document", message: "Prescription ready for signature", date: today, read: true },
 ];
 

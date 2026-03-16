@@ -75,8 +75,6 @@ function asStringArray(input: unknown): string[] {
     .filter(Boolean);
 }
 
-const DEFAULT_PRESCRIPTION_RECIPIENT = "yvankondjo8@gmail.com";
-
 function LiveKitTranscriptListener({
   onTranscript,
   onSuggestions,
@@ -729,8 +727,9 @@ export default function AppointmentDetail() {
     if (!appointment || !patient) return;
     if (sendingPrescription) return;
     const recipientEmail =
-      (import.meta.env.VITE_PRESCRIPTION_RECIPIENT_EMAIL || DEFAULT_PRESCRIPTION_RECIPIENT).trim() ||
-      DEFAULT_PRESCRIPTION_RECIPIENT;
+      (import.meta.env.VITE_PRESCRIPTION_RECIPIENT_EMAIL || "").trim() ||
+      patient.email?.trim() ||
+      undefined;
     setSendingPrescription(true);
     try {
       const response = await postPrescriptionSend({

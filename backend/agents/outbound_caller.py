@@ -27,8 +27,15 @@ load_dotenv()
 logger = logging.getLogger("medvoice.outbound")
 BACKEND_API_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 OUTBOUND_AGENT_NAME = (os.getenv("LIVEKIT_OUTBOUND_AGENT_NAME") or "outbound-caller").strip()
-FOLLOWUP_TEST_PHONE = (os.getenv("FOLLOWUP_TEST_PHONE") or "0765540003").strip()
+FOLLOWUP_TEST_PHONE = (os.getenv("FOLLOWUP_TEST_PHONE") or "").strip()
 SIP_OUTBOUND_TRUNK_ID = (os.getenv("SIP_OUTBOUND_TRUNK_ID") or "").strip()
+
+
+def _resolve_inference_llm_model() -> str:
+    configured = (os.getenv("LIVEKIT_INFERENCE_LLM_MODEL") or "").strip()
+    if configured:
+        return configured
+    return "openai/gpt-4.1-mini"
 
 
 def _read_float_env(name: str, default: float) -> float:
@@ -269,6 +276,9 @@ def _build_instructions(metadata: dict[str, Any], state: OutboundCallState) -> s
         " - Keep answers concise and empathetic.\n"
         " - Use tool end_call only when patient confirms call can end.\n"
         " - Use tool detected_answering_machine only if voicemail is clearly detected."
+        " - If the patient gives you all the required information directly, ask if he/she wants to book an appointment"
+        " - And end the call if all is good for the patient don't be redondant"
+
     )
 
 
@@ -385,6 +395,25 @@ def _attach_transcript_logging(session: AgentSession, state: OutboundCallState) 
         )
         logger.info("[OUTBOUND][%s] %s", speaker, text)
 
+    @session.on("metrics_collected")
+    def on_metrics_collected(event) -> None:
+        metrics = getattr(event, "metrics", None)
+        if not metrics:
+            return
+        metric_type = getattr(metrics, "type", "unknown")
+        duration = getattr(metrics, "duration", None)
+        ttft = getattr(metrics, "ttft", None)
+        ttfb = getattr(metrics, "ttfb", None)
+        eou_delay = getattr(metrics, "end_of_utterance_delay", None)
+        logger.info(
+            "Metrics: type=%s duration_ms=%s ttft_ms=%s ttfb_ms=%s eou_delay_ms=%s",
+            metric_type,
+            int(duration * 1000) if isinstance(duration, (int, float)) else None,
+            int(ttft * 1000) if isinstance(ttft, (int, float)) else None,
+            int(ttfb * 1000) if isinstance(ttfb, (int, float)) else None,
+            int(eou_delay * 1000) if isinstance(eou_delay, (int, float)) else None,
+        )
+
 
 class OutboundFollowupAgent(Agent):
     def __init__(self, *, state: OutboundCallState, metadata: dict[str, Any]):
@@ -394,22 +423,32 @@ class OutboundFollowupAgent(Agent):
     @function_tool()
     async def end_call(self, context: RunContext) -> str:
         """End the call once the patient confirms the conversation is complete."""
-        elapsed = time.monotonic() - self._state.started_monotonic
-        if elapsed < 20:
-            return "Continue for a bit longer before ending the call."
-        self._state.status = "completed"
-        await _remove_sip_participant(self._state)
-        return "Call ended."
+        tool_started = time.perf_counter()
+        try:
+            elapsed = time.monotonic() - self._state.started_monotonic
+            if elapsed < 20:
+                return "Continue for a bit longer before ending the call."
+            self._state.status = "completed"
+            await _remove_sip_participant(self._state)
+            return "Call ended."
+        finally:
+            elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
+            logger.info("Tool latency: end_call duration_ms=%s", elapsed_ms)
 
     @function_tool()
     async def detected_answering_machine(self, context: RunContext) -> str:
         """Use only if voicemail/answering machine is clearly detected."""
-        elapsed = time.monotonic() - self._state.started_monotonic
-        if elapsed < 20:
-            return "Do not end for voicemail too early. Wait and verify first."
-        self._state.status = "voicemail"
-        await _remove_sip_participant(self._state)
-        return "Voicemail detected. Ending call."
+        tool_started = time.perf_counter()
+        try:
+            elapsed = time.monotonic() - self._state.started_monotonic
+            if elapsed < 20:
+                return "Do not end for voicemail too early. Wait and verify first."
+            self._state.status = "voicemail"
+            await _remove_sip_participant(self._state)
+            return "Voicemail detected. Ending call."
+        finally:
+            elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
+            logger.info("Tool latency: detected_answering_machine duration_ms=%s", elapsed_ms)
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -422,7 +461,7 @@ async def entrypoint(ctx: JobContext) -> None:
     patient_phone = str(metadata.get("patient_phone") or patient_id)
     patient_name = str(metadata.get("patient_name") or "Patient")
     doctor_name = str(metadata.get("doctor_name") or "Doctor")
-    dial_to_raw = str(metadata.get("dial_to") or FOLLOWUP_TEST_PHONE)
+    dial_to_raw = str(metadata.get("dial_to") or FOLLOWUP_TEST_PHONE).strip()
     dial_to = _to_e164_fr(dial_to_raw)
     question_plan = [
         str(item).strip()
@@ -451,6 +490,22 @@ async def entrypoint(ctx: JobContext) -> None:
             str(metadata.get("next_appointment_at") or "").strip() or None
         ),
     )
+    if not state.dial_to:
+        state.status = "failed"
+        logger.warning(
+            "Missing dial target for followup_call_id=%s room=%s",
+            state.followup_call_id,
+            ctx.room.name,
+        )
+        state.transcript.append(
+            {
+                "speaker": "AI",
+                "text": "Missing dial target. Provide patientPhone in the request or configure FOLLOWUP_TEST_PHONE for test mode.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await _post_completion(state)
+        return
     max_stale_age = int(float(os.getenv("OUTBOUND_STALE_JOB_MAX_SECONDS", "180")))
     queued_at = _parse_iso_datetime(str(metadata.get("queued_at") or ""))
     if queued_at and max_stale_age > 0:
@@ -539,11 +594,14 @@ async def entrypoint(ctx: JobContext) -> None:
             await _post_completion(state)
             return
 
+    llm_model = _resolve_inference_llm_model()
+    logger.info("Using LiveKit Inference LLM model=%s", llm_model)
     session = AgentSession(
         stt=_build_stt(),
-        llm=openai.LLM(model=os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")),
+        llm=llm_model,
         tts=_build_tts(),
         vad=silero.VAD.load(),
+        preemptive_generation=True,
     )
     _attach_transcript_logging(session, state)
     await session.start(

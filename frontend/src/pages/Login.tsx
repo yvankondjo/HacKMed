@@ -53,7 +53,7 @@ export default function Login() {
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="+33612345678"
+              placeholder="+33600000001"
               className="h-11 bg-card border-input placeholder:text-muted-foreground/50 focus-visible:ring-primary focus-visible:border-primary"
             />
           </div>

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
@@ -23,9 +24,9 @@ load_dotenv()
 
 REQUIRED_ENV = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
 BACKEND_API_BASE_URL = os.getenv("BACKEND_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
-TEST_BOOKING_PHONE = (os.getenv("TELEPHONY_TEST_BOOKING_PHONE") or "+33765540003").strip()
+TEST_BOOKING_PHONE = (os.getenv("TELEPHONY_TEST_BOOKING_PHONE") or os.getenv("FOLLOWUP_TEST_PHONE") or "").strip()
 DEFAULT_TELEPHONY_WELCOME = (
-    "Hello, welcome to Dr John cabinet How can i help you."
+    "Hello, thank you for calling MedVoice Care Connect. Are you calling for a first visit or a follow-up appointment?"
 )
 logger = logging.getLogger("medvoice.telephony")
 CALL_TRANSCRIPTS: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -177,7 +178,17 @@ def load_agent_prompt() -> str:
 
 
 def load_welcome_message() -> str:
-    return  DEFAULT_TELEPHONY_WELCOME
+    configured = (os.getenv("TELEPHONY_WELCOME_MESSAGE") or "").strip()
+    if configured:
+        return configured
+    return DEFAULT_TELEPHONY_WELCOME
+
+
+def resolve_inference_llm_model() -> str:
+    configured = (os.getenv("LIVEKIT_INFERENCE_LLM_MODEL") or "").strip()
+    if configured:
+        return configured
+    return "openai/gpt-4.1-mini"
 
 
 def build_stt():
@@ -278,81 +289,86 @@ class VoiceAssistant(Agent):
         days_ahead: int = 10,
     ) -> str:
         """Return real-time available slots from Cal.com to offer the patient."""
-        logger.info(
-            "Tool call: propose_consultation_slots timezone=%s count=%s days_ahead=%s",
-            timezone,
-            count,
-            days_ahead,
-        )
-        safe_count = min(max(count, 2), 5)
-        safe_days = min(max(days_ahead, 1), 30)
-        availability_payload: dict | None = None
-
+        tool_started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=12) as client:
-                response = await client.get(
-                    f"{BACKEND_API_BASE_URL}/api/booking/calcom/availability",
-                    params={
-                        "timezone": timezone,
-                        "daysAhead": safe_days,
-                        "limit": safe_count,
-                    },
-                )
-                if response.status_code >= 400:
-                    logger.error(
-                        "Availability endpoint failed status=%s body=%s",
-                        response.status_code,
-                        response.text[:300],
-                    )
-                    return (
-                        "I could not fetch live availability right now. "
-                        "Please try again in a moment or offer manual callback scheduling."
-                    )
-                availability_payload = response.json()
-                logger.info(
-                    "Tool result: propose_consultation_slots source=%s slots=%s",
-                    (availability_payload or {}).get("source"),
-                    len((availability_payload or {}).get("slots") or []),
-                )
-        except Exception as exc:  # pragma: no cover
-            logger.warning("Cal.com availability lookup failed: %s", exc)
-            return (
-                "I could not fetch live availability right now. "
-                "Please try again in a moment or offer manual callback scheduling."
+            logger.info(
+                "Tool call: propose_consultation_slots timezone=%s count=%s days_ahead=%s",
+                timezone,
+                count,
+                days_ahead,
             )
+            safe_count = min(max(count, 2), 5)
+            safe_days = min(max(days_ahead, 1), 30)
+            availability_payload: dict | None = None
 
-        slots = availability_payload.get("slots") if isinstance(availability_payload, dict) else []
-        options: list[dict[str, str]] = []
-        if isinstance(slots, list):
-            for item in slots[:safe_count]:
-                starts_at_iso = str((item or {}).get("startsAt") or "").strip()
-                if not starts_at_iso:
-                    continue
-                options.append(
-                    {
-                        "starts_at_iso": starts_at_iso,
-                        "label": format_slot_label(starts_at_iso, timezone),
-                    }
+            try:
+                async with httpx.AsyncClient(timeout=12) as client:
+                    response = await client.get(
+                        f"{BACKEND_API_BASE_URL}/api/booking/calcom/availability",
+                        params={
+                            "timezone": timezone,
+                            "daysAhead": safe_days,
+                            "limit": safe_count,
+                        },
+                    )
+                    if response.status_code >= 400:
+                        logger.error(
+                            "Availability endpoint failed status=%s body=%s",
+                            response.status_code,
+                            response.text[:300],
+                        )
+                        return (
+                            "I could not fetch live availability right now. "
+                            "Please try again in a moment or offer manual callback scheduling."
+                        )
+                    availability_payload = response.json()
+                    logger.info(
+                        "Tool result: propose_consultation_slots source=%s slots=%s",
+                        (availability_payload or {}).get("source"),
+                        len((availability_payload or {}).get("slots") or []),
+                    )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Cal.com availability lookup failed: %s", exc)
+                return (
+                    "I could not fetch live availability right now. "
+                    "Please try again in a moment or offer manual callback scheduling."
                 )
 
-        if not options:
-            return (
-                "No live slot is available in the selected range. "
-                "Ask the patient for a wider date range or another preferred day."
-            )
+            slots = availability_payload.get("slots") if isinstance(availability_payload, dict) else []
+            options: list[dict[str, str]] = []
+            if isinstance(slots, list):
+                for item in slots[:safe_count]:
+                    starts_at_iso = str((item or {}).get("startsAt") or "").strip()
+                    if not starts_at_iso:
+                        continue
+                    options.append(
+                        {
+                            "starts_at_iso": starts_at_iso,
+                            "label": format_slot_label(starts_at_iso, timezone),
+                        }
+                    )
 
-        return json.dumps(
-            {
-                "timezone": timezone,
-                "options": options,
-                "source": (availability_payload or {}).get("source", "calcom"),
-                "agent_instruction": (
-                    "Read the options to the patient, ask them to pick one, "
-                    "then ask explicit confirmation before booking."
-                ),
-            },
-            ensure_ascii=True,
-        )
+            if not options:
+                return (
+                    "No live slot is available in the selected range. "
+                    "Ask the patient for a wider date range or another preferred day."
+                )
+
+            return json.dumps(
+                {
+                    "timezone": timezone,
+                    "options": options,
+                    "source": (availability_payload or {}).get("source", "calcom"),
+                    "agent_instruction": (
+                        "Read the options to the patient, ask them to pick one, "
+                        "then ask explicit confirmation before booking."
+                    ),
+                },
+                ensure_ascii=True,
+            )
+        finally:
+            elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
+            logger.info("Tool latency: propose_consultation_slots duration_ms=%s", elapsed_ms)
 
     @function_tool()
     async def book_consultation_with_confirmation(
@@ -371,98 +387,108 @@ class VoiceAssistant(Agent):
         conversation_summary: str | None = None,
     ) -> str:
         """Create booking in Cal.com, send SMS confirmation, and persist call medical context."""
-        room_name = _extract_room_name(context)
-        logger.info(
-            "Tool call: book_consultation_with_confirmation room=%s patient_name=%s starts_at_iso=%s timezone=%s",
-            room_name,
-            patient_name,
-            starts_at_iso,
-            timezone,
-        )
-        transcript = _build_transcript_payload(room_name)
-        clean_name = (patient_name or "").strip()
-        if not clean_name:
-            return (
-                "Booking was not executed because patient full name is missing. "
-                "Please ask the caller full name, confirm it, then retry booking."
-            )
-        requested_slot = (starts_at_iso or "").strip()
-        if not requested_slot:
-            return (
-                "Booking was not executed because no specific slot was selected. "
-                "Please offer schedule options, ask the patient to choose one, and confirm before booking."
-            )
-        forced_phone = TEST_BOOKING_PHONE
-        effective_patient_id = (patient_id or "").strip()
-        if not effective_patient_id:
-            effective_patient_id = infer_patient_id(forced_phone)
-        effective_email = infer_email(forced_phone, patient_email)
-        effective_starts = requested_slot
-        parsed_start = parse_iso_datetime(effective_starts)
-        if not parsed_start:
-            return (
-                "Booking was not executed because the selected date/time was invalid. "
-                "Please ask for a valid date/time and confirm again."
-            )
-        if parsed_start <= datetime.now(dt_timezone.utc):
-            return (
-                "Booking was not executed because the selected date/time is in the past. "
-                "Please ask the patient to choose a later slot."
-            )
-        effective_conditions = compact_str_list(conditions or [])
-        effective_allergies = compact_str_list(allergies or [])
-
-        payload = {
-            "patientId": effective_patient_id,
-            "patientName": clean_name,
-            "patientPhone": forced_phone,
-            "patientEmail": effective_email,
-            "reason": reason,
-            "startsAt": effective_starts,
-            "timezone": timezone,
-            "symptoms": symptoms or [],
-            "conditions": effective_conditions,
-            "allergies": effective_allergies,
-            "conversationSummary": conversation_summary,
-            "transcript": transcript,
-            "callStartedAt": CALL_STARTED_AT.get(room_name),
-            "callEndedAt": utc_now_iso(),
-            "createdVia": "livekit_tool",
-        }
-
+        tool_started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=25) as client:
-                response = await client.post(f"{BACKEND_API_BASE_URL}/api/booking/calcom", json=payload)
-                if response.status_code >= 400:
-                    logger.error(
-                        "Tool result: book_consultation_with_confirmation failed status=%s body=%s",
-                        response.status_code,
-                        response.text[:300],
-                    )
-                    return booking_failure_message(response.status_code, response.text)
-                else:
-                    body = response.json()
-                    logger.info(
-                        "Tool result: book_consultation_with_confirmation success appointment_id=%s sms_status=%s",
-                        body.get("appointmentId"),
-                        body.get("smsStatus"),
-                    )
-        except Exception as exc:  
-            logger.exception("Tool exception: book_consultation_with_confirmation failed: %s", exc)
-            return f"Booking failed: {exc}"
-        finally:
-            if room_name in CALL_TRANSCRIPTS:
-                CALL_TRANSCRIPTS.pop(room_name, None)
-            CALL_STARTED_AT.pop(room_name, None)
+            room_name = _extract_room_name(context)
+            logger.info(
+                "Tool call: book_consultation_with_confirmation room=%s patient_name=%s starts_at_iso=%s timezone=%s",
+                room_name,
+                patient_name,
+                starts_at_iso,
+                timezone,
+            )
+            transcript = _build_transcript_payload(room_name)
+            clean_name = (patient_name or "").strip()
+            if not clean_name:
+                return (
+                    "Booking was not executed because patient full name is missing. "
+                    "Please ask the caller full name, confirm it, then retry booking."
+                )
+            requested_slot = (starts_at_iso or "").strip()
+            if not requested_slot:
+                return (
+                    "Booking was not executed because no specific slot was selected. "
+                    "Please offer schedule options, ask the patient to choose one, and confirm before booking."
+                )
+            forced_phone = TEST_BOOKING_PHONE
+            if not forced_phone:
+                return (
+                    "Booking was not executed because TELEPHONY_TEST_BOOKING_PHONE is not configured. "
+                    "Set TELEPHONY_TEST_BOOKING_PHONE or FOLLOWUP_TEST_PHONE in the environment, then retry."
+                )
+            effective_patient_id = (patient_id or "").strip()
+            if not effective_patient_id:
+                effective_patient_id = infer_patient_id(forced_phone)
+            effective_email = infer_email(forced_phone, patient_email)
+            effective_starts = requested_slot
+            parsed_start = parse_iso_datetime(effective_starts)
+            if not parsed_start:
+                return (
+                    "Booking was not executed because the selected date/time was invalid. "
+                    "Please ask for a valid date/time and confirm again."
+                )
+            if parsed_start <= datetime.now(dt_timezone.utc):
+                return (
+                    "Booking was not executed because the selected date/time is in the past. "
+                    "Please ask the patient to choose a later slot."
+                )
+            effective_conditions = compact_str_list(conditions or [])
+            effective_allergies = compact_str_list(allergies or [])
 
-        appointment_id = body.get("appointmentId", "unknown")
-        sms_status = body.get("smsStatus", "unknown")
-        meeting_url = body.get("meetingUrl")
-        link_part = f" Meeting link: {meeting_url}." if meeting_url else ""
-        return (
-            f"Booking completed. Appointment ID: {appointment_id}. "
-            f"SMS status: {sms_status}.{link_part}"
-        )
+            payload = {
+                "patientId": effective_patient_id,
+                "patientName": clean_name,
+                "patientPhone": forced_phone,
+                "patientEmail": effective_email,
+                "reason": reason,
+                "startsAt": effective_starts,
+                "timezone": timezone,
+                "symptoms": symptoms or [],
+                "conditions": effective_conditions,
+                "allergies": effective_allergies,
+                "conversationSummary": conversation_summary,
+                "transcript": transcript,
+                "callStartedAt": CALL_STARTED_AT.get(room_name),
+                "callEndedAt": utc_now_iso(),
+                "createdVia": "livekit_tool",
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=25) as client:
+                    response = await client.post(f"{BACKEND_API_BASE_URL}/api/booking/calcom", json=payload)
+                    if response.status_code >= 400:
+                        logger.error(
+                            "Tool result: book_consultation_with_confirmation failed status=%s body=%s",
+                            response.status_code,
+                            response.text[:300],
+                        )
+                        return booking_failure_message(response.status_code, response.text)
+                    else:
+                        body = response.json()
+                        logger.info(
+                            "Tool result: book_consultation_with_confirmation success appointment_id=%s sms_status=%s",
+                            body.get("appointmentId"),
+                            body.get("smsStatus"),
+                        )
+            except Exception as exc:
+                logger.exception("Tool exception: book_consultation_with_confirmation failed: %s", exc)
+                return f"Booking failed: {exc}"
+            finally:
+                if room_name in CALL_TRANSCRIPTS:
+                    CALL_TRANSCRIPTS.pop(room_name, None)
+                CALL_STARTED_AT.pop(room_name, None)
+
+            appointment_id = body.get("appointmentId", "unknown")
+            sms_status = body.get("smsStatus", "unknown")
+            meeting_url = body.get("meetingUrl")
+            link_part = f" Meeting link: {meeting_url}." if meeting_url else ""
+            return (
+                f"Booking completed. Appointment ID: {appointment_id}. "
+                f"SMS status: {sms_status}.{link_part}"
+            )
+        finally:
+            elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
+            logger.info("Tool latency: book_consultation_with_confirmation duration_ms=%s", elapsed_ms)
 
 
 def _extract_room_name(context: RunContext) -> str:
@@ -519,6 +545,25 @@ def attach_session_logging(session: AgentSession, room_name: str) -> None:
         source = getattr(event, "source", "unknown")
         logger.error("Agent session error from %s: %s", source, error)
 
+    @session.on("metrics_collected")
+    def on_metrics_collected(event) -> None:
+        metrics = getattr(event, "metrics", None)
+        if not metrics:
+            return
+        metric_type = getattr(metrics, "type", "unknown")
+        duration = getattr(metrics, "duration", None)
+        ttft = getattr(metrics, "ttft", None)
+        ttfb = getattr(metrics, "ttfb", None)
+        eou_delay = getattr(metrics, "end_of_utterance_delay", None)
+        logger.info(
+            "Metrics: type=%s duration_ms=%s ttft_ms=%s ttfb_ms=%s eou_delay_ms=%s",
+            metric_type,
+            int(duration * 1000) if isinstance(duration, (int, float)) else None,
+            int(ttft * 1000) if isinstance(ttft, (int, float)) else None,
+            int(ttfb * 1000) if isinstance(ttfb, (int, float)) else None,
+            int(eou_delay * 1000) if isinstance(eou_delay, (int, float)) else None,
+        )
+
 
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
@@ -526,20 +571,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     CALL_TRANSCRIPTS.pop(room_name, None)
     CALL_STARTED_AT[room_name] = utc_now_iso()
 
-    llm_model = (
-        os.getenv("OPENAI_LLM_MODEL")
-        or os.getenv("OPENAI_MODEL")
-        or "gpt-4.1"
-    )
+    llm_model = resolve_inference_llm_model()
+    logger.info("Using LiveKit Inference LLM model=%s", llm_model)
     session = AgentSession(
         stt=build_stt(),
-        llm=openai.LLM(
-            model=llm_model,
-            temperature=0.2,
-            parallel_tool_calls=False,
-        ),
+        llm=llm_model,
         tts=build_tts(),
         vad=silero.VAD.load(),
+        preemptive_generation=True,
     )
     attach_session_logging(session, room_name)
 

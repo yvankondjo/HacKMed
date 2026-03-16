@@ -11,10 +11,10 @@ INSERT INTO users (id, email, phone, password_hash, role, is_active, last_login_
 VALUES
   ('71000000-0000-0000-0000-000000000001', 'doctor.mock@medvoice.local', '+33610000001', NULL, 'doctor', true, now() - interval '1 day'),
   ('71000000-0000-0000-0000-000000000002', 'admin.mock@medvoice.local', '+33610000002', NULL, 'admin', true, now() - interval '2 day'),
-  ('71000000-0000-0000-0000-000000000101', 'amina.diallo@example.com', '+33670000101', NULL, 'patient', true, now() - interval '3 day'),
-  ('71000000-0000-0000-0000-000000000102', 'lucas.bernard@example.com', '+33670000102', NULL, 'patient', true, now() - interval '4 day'),
-  ('71000000-0000-0000-0000-000000000103', 'nora.kone@example.com', '+33670000103', NULL, 'patient', true, now() - interval '5 day'),
-  ('71000000-0000-0000-0000-000000000104', 'yvankondjo8@gmail.com', '+33670000104', NULL, 'patient', true, now() - interval '6 day')
+  ('71000000-0000-0000-0000-000000000101', 'alice.example@example.test', '+33670000101', NULL, 'patient', true, now() - interval '3 day'),
+  ('71000000-0000-0000-0000-000000000102', 'bruno.sample@example.test', '+33670000102', NULL, 'patient', true, now() - interval '4 day'),
+  ('71000000-0000-0000-0000-000000000103', 'chloe.demo@example.test', '+33670000103', NULL, 'patient', true, now() - interval '5 day'),
+  ('71000000-0000-0000-0000-000000000104', 'dorian.mock@example.test', '+33670000104', NULL, 'patient', true, now() - interval '6 day')
 ON CONFLICT (id) DO UPDATE
 SET
   email = EXCLUDED.email,
@@ -32,8 +32,8 @@ VALUES
   (
     '72000000-0000-0000-0000-000000000001',
     '71000000-0000-0000-0000-000000000001',
-    'Laurent',
-    'Martin',
+    'Alex',
+    'Care',
     'General Practitioner',
     '+33610000001',
     NULL,
@@ -53,10 +53,10 @@ INSERT INTO patients (
   id, user_id, phone, first_name, last_name, date_of_birth, sex, email, blood_type, address
 )
 VALUES
-  ('73000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000101', '+33670000101', 'Amina', 'Diallo', '1993-05-17', 'female', 'amina.diallo@example.com', 'A+', '12 Rue Victor Hugo, Paris'),
-  ('73000000-0000-0000-0000-000000000002', '71000000-0000-0000-0000-000000000102', '+33670000102', 'Lucas', 'Bernard', '1988-11-02', 'male', 'lucas.bernard@example.com', 'O-', '4 Avenue de Lyon, Marseille'),
-  ('73000000-0000-0000-0000-000000000003', '71000000-0000-0000-0000-000000000103', '+33670000103', 'Nora', 'Kone', '1979-01-26', 'female', 'nora.kone@example.com', 'B+', '88 Rue Nationale, Lille'),
-  ('73000000-0000-0000-0000-000000000004', '71000000-0000-0000-0000-000000000104', '+33670000104', 'Yvan', 'Kondjo', '1997-09-09', 'male', 'yvankondjo8@gmail.com', 'AB+', '31 Rue de la Republique, Nantes')
+  ('73000000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000101', '+33670000101', 'Alice', 'Example', '1993-05-17', 'female', 'alice.example@example.test', 'A+', '1 Rue des Tests, Paris'),
+  ('73000000-0000-0000-0000-000000000002', '71000000-0000-0000-0000-000000000102', '+33670000102', 'Bruno', 'Sample', '1988-11-02', 'male', 'bruno.sample@example.test', 'O-', '2 Avenue des Tests, Marseille'),
+  ('73000000-0000-0000-0000-000000000003', '71000000-0000-0000-0000-000000000103', '+33670000103', 'Chloe', 'Demo', '1979-01-26', 'female', 'chloe.demo@example.test', 'B+', '3 Boulevard des Tests, Lille'),
+  ('73000000-0000-0000-0000-000000000004', '71000000-0000-0000-0000-000000000104', '+33670000104', 'Dorian', 'Mock', '1997-09-09', 'male', 'dorian.mock@example.test', 'AB+', '4 Place des Tests, Nantes')
 ON CONFLICT (phone) DO UPDATE
 SET
   user_id = EXCLUDED.user_id,
@@ -240,7 +240,7 @@ VALUES
     '77000000-0000-0000-0000-000000000004',
     'patient',
     '71000000-0000-0000-0000-000000000104',
-    'My email is yvankondjo8@gmail.com',
+    'My email is dorian.mock@example.test',
     now() - interval '1 day' + interval '6 minutes',
     '{"captured":true}'::jsonb
   ),
@@ -501,7 +501,7 @@ VALUES
     '71000000-0000-0000-0000-000000000001',
     'reminder',
     'Consultation done',
-    'Amina consultation has been completed.',
+    'Alice consultation has been completed.',
     'appointment',
     '76000000-0000-0000-0000-000000000001',
     now() - interval '2 day'
@@ -511,7 +511,7 @@ VALUES
     '71000000-0000-0000-0000-000000000001',
     'alert',
     'Asthma risk',
-    'Lucas reported nocturnal dyspnea.',
+    'Bruno reported nocturnal dyspnea.',
     'appointment',
     '76000000-0000-0000-0000-000000000002',
     NULL
@@ -531,7 +531,7 @@ VALUES
     '71000000-0000-0000-0000-000000000001',
     'document',
     'Prescription emailed',
-    'Yvan prescription was sent by email.',
+    'Dorian prescription was sent by email.',
     'prescription',
     '7b000000-0000-0000-0000-000000000004',
     NULL

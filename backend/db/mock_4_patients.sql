@@ -16,46 +16,46 @@ VALUES
   (
     '91000000-0000-0000-0000-000000000001',
     '+33670000001',
-    'Amina',
-    'Diallo',
+    'Alice',
+    'Example',
     '1993-05-17',
     'female',
-    'amina.diallo@example.com',
+    'alice.example@example.test',
     'A+',
-    '12 Rue Victor Hugo, Paris'
+    '1 Rue des Tests, Paris'
   ),
   (
     '91000000-0000-0000-0000-000000000002',
     '+33670000002',
-    'Lucas',
-    'Bernard',
+    'Bruno',
+    'Sample',
     '1988-11-02',
     'male',
-    'lucas.bernard@example.com',
+    'bruno.sample@example.test',
     'O-',
-    '4 Avenue de Lyon, Marseille'
+    '2 Avenue des Tests, Marseille'
   ),
   (
     '91000000-0000-0000-0000-000000000003',
     '+33670000003',
-    'Nora',
-    'Kone',
+    'Chloe',
+    'Demo',
     '1979-01-26',
     'female',
-    'nora.kone@example.com',
+    'chloe.demo@example.test',
     'B+',
-    '88 Rue Nationale, Lille'
+    '3 Boulevard des Tests, Lille'
   ),
   (
     '91000000-0000-0000-0000-000000000004',
     '+33670000004',
-    'Yvan',
-    'Kondjo',
+    'Dorian',
+    'Mock',
     '1997-09-09',
     'male',
-    'yvankondjo8@gmail.com',
+    'dorian.mock@example.test',
     'AB+',
-    '31 Rue de la Republique, Nantes'
+    '4 Place des Tests, Nantes'
   )
 ON CONFLICT (phone) DO UPDATE
 SET

@@ -34,8 +34,8 @@ INSERT INTO doctors (
 VALUES (
   '20000000-0000-0000-0000-000000000001',
   '10000000-0000-0000-0000-000000000001',
-  'Laurent',
-  'Martin',
+  'Alex',
+  'Care',
   'General Practitioner',
   '+33611111111',
   'POC-LICENSE-001'
@@ -61,32 +61,32 @@ INSERT INTO patients (
 VALUES
   (
     '30000000-0000-0000-0000-000000000001',
-    'Marie',
-    'Dupont',
+    'Alice',
+    'Example',
     '1978-06-15',
     'female',
-    '+33612345678',
-    'marie.dupont@email.com',
+    '+33600000001',
+    'alice.example@example.test',
     'A+'
   ),
   (
     '30000000-0000-0000-0000-000000000002',
-    'Jean',
-    'Martin',
+    'Bruno',
+    'Sample',
     '1985-03-22',
     'male',
-    '+33698765432',
-    'jean.martin@email.com',
+    '+33600000002',
+    'bruno.sample@example.test',
     'O-'
   ),
   (
     '30000000-0000-0000-0000-000000000003',
-    'Sophie',
-    'Bernard',
+    'Chloe',
+    'Demo',
     '1992-11-08',
     'female',
-    '+33655443322',
-    'sophie.bernard@email.com',
+    '+33600000003',
+    'chloe.demo@example.test',
     'B+'
   )
 ON CONFLICT (id) DO UPDATE

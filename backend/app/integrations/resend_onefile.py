@@ -205,7 +205,7 @@ def send_with_resend(
     api_key = _env("RESEND_API_KEY", "resend_api_key", "RENSEND_API_KEY", "rensend_api_key")
     from_email = _env("RESEND_FROM_EMAIL", "resend_from_email", default="onboarding@resend.dev")
     reply_to = _env("RESEND_REPLY_TO", "resend_reply_to")
-    override_to = _env("RESEND_TO", "resend_to", default="yvankondjo8@gmail.com")
+    override_to = _env("RESEND_TO", "resend_to")
     actual_to = override_to if override_to else to_email
 
     if not api_key:

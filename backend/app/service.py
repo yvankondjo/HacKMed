@@ -613,7 +613,7 @@ class LifecycleService:
             != "false"
         )
         self._outbound_agent_name = (os.getenv("LIVEKIT_OUTBOUND_AGENT_NAME") or "outbound-caller").strip()
-        self._followup_default_phone = (os.getenv("FOLLOWUP_TEST_PHONE") or "0765540003").strip()
+        self._followup_default_phone = (os.getenv("FOLLOWUP_TEST_PHONE") or "").strip()
         self._calcom_client = CalComClient(load_calendar_config())
         self._sms_client = TwilioSmsClient(load_sms_config())
         self._persistence_client = PostgresPersistenceClient(load_persistence_config())
@@ -1359,7 +1359,7 @@ class LifecycleService:
         request: FollowupCallRequest,
     ) -> FollowupCallResponse:
         followup_call_id = f"fup-{uuid4().hex[:12]}"
-        target_phone_raw = (self._followup_default_phone or request.patientPhone or "").strip()
+        target_phone_raw = (request.patientPhone or self._followup_default_phone or "").strip()
         if not target_phone_raw:
             raise RuntimeError("No target phone available for follow-up call.")
         target_dial_to = _to_e164_fr(target_phone_raw)

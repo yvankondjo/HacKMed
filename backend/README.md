@@ -62,7 +62,9 @@ CONSULTATION_AGENT_NAME=medvoice-consultation
 CONSULTATION_AUTO_DISPATCH=true
 LIVEKIT_OUTBOUND_AGENT_NAME=outbound-caller
 SIP_OUTBOUND_TRUNK_ID=<your-livekit-sip-outbound-trunk-id>
-FOLLOWUP_TEST_PHONE=0765540003
+FOLLOWUP_TEST_PHONE=<optional-test-number-for-followup-fallback>
+TELEPHONY_TEST_BOOKING_PHONE=<optional-test-number-for-telephony-booking>
+TELEPHONY_WELCOME_MESSAGE=Hello, thank you for calling MedVoice Care Connect. Are you calling for a first visit or a follow-up appointment?
 OUTBOUND_CALL_LANGUAGE=en
 OPENAI_API_KEY=xxxx
 SPEECHMATICS_API_KEY=xxxx
@@ -127,10 +129,10 @@ TWILIO_FROM_NUMBER=+1XXXXXXXXXX
 
 ```json
 {
-  "patientId": "pat-1",
-  "patientName": "Marie Dupont",
-  "patientPhone": "+33612345678",
-  "patientEmail": "marie@example.com",
+  "patientId": "pat-demo-1",
+  "patientName": "Alice Example",
+  "patientPhone": "+33600000001",
+  "patientEmail": "alice.example@example.test",
   "reason": "Sore throat",
   "startsAt": "2026-03-01T09:00:00+01:00",
   "timezone": "Europe/Paris",
@@ -162,10 +164,10 @@ For telephony calls, transcript lines captured by the agent are automatically at
 ```json
 {
   "appointmentId": "55841ae8-b82e-4425-9f62-f978fc52634d",
-  "patientId": "+33765540003",
-  "patientName": "Jacob Doe",
-  "patientPhone": "0765540003",
-  "doctorName": "Dr. Laurent Martin"
+  "patientId": "pat-demo-1",
+  "patientName": "Alice Example",
+  "patientPhone": "+33600000001",
+  "doctorName": "Dr. Alex Care"
 }
 ```
 
@@ -182,4 +184,4 @@ In Supabase SQL editor, run:
 1. `backend/db/schema.sql`
 2. `backend/db/supabase_poc_seed.sql`
 
-This seeds one doctor only (`Dr. Laurent Martin`) and demo patient data.
+This seeds one doctor only (`Dr. Alex Care`) and demo patient data.

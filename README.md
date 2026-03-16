@@ -1,80 +1,157 @@
 # MedVoice Care Connect
 
-MedVoice Care Connect is a full-stack voice-clinic workflow app with:
+MedVoice Care Connect is a full-stack voice clinic workflow app for:
 
-- a FastAPI backend
-- a React frontend dashboard
-- LiveKit voice agents for consultation and outbound follow-up calls
-- optional persistence to PostgreSQL/Supabase
-- optional prescription email delivery via Resend
-
-## What This Project Covers
-
-The product lifecycle implemented in this repo:
-
-1. Patient call and appointment intake
-2. Day-before confirmation
+1. Patient call intake
+2. Appointment booking
 3. Live consultation with transcript streaming
-4. AI summary + prescription generation
-5. Prescription send via email
+4. AI summary and prescription generation
+5. Prescription delivery by email
 6. Post-consultation outbound follow-up call
 
-## Architecture
+## Stack
 
-Services started by Docker Compose:
+### App stack
 
-- `backend`: FastAPI API (`http://localhost:8000`)
-- `frontend`: React app served by Nginx (`http://localhost:8080`)
-- `telephony-agent`: live telephony/voice workflow agent
+- Backend API: FastAPI + Pydantic
+- Frontend dashboard: React + Vite + TypeScript + Tailwind
+- Voice agents: LiveKit Agents
+- LLM/TTS: OpenAI
+- Medical STT/TTS: Speechmatics
+
+### External integrations
+
+- Database and persistence: PostgreSQL or Supabase via `DATABASE_URL`
+- Telephony and SMS: Twilio
+- Prescription email: Resend
+- Appointment scheduling: Cal.com
+- Realtime rooms and SIP calling: LiveKit
+
+### Local runtime
+
+- Container orchestration: Docker Compose
+- Reverse-served frontend: Nginx in the frontend image
+
+## Docker Architecture
+
+`docker compose up --build` starts the local application containers:
+
+- `backend`: FastAPI API on `http://localhost:8000`
+- `frontend`: React app served on `http://localhost:8080`
+- `telephony-agent`: inbound/call intake agent
 - `consultation-agent`: live consultation agent
-- `outbound-caller`: post-consultation follow-up caller agent
+- `outbound-caller`: follow-up call agent
 
-Main files:
+Important:
 
-- Backend API entrypoint: `backend/app/main.py`
-- Core logic: `backend/app/service.py`
-- Resend email integration: `backend/app/integrations/resend_onefile.py`
-- Twilio SMS integration: `backend/app/integrations/twilio_client.py`
+- Docker Compose does not start Supabase, Twilio, LiveKit, Resend, or Cal.com locally
+- those services are external and are configured through `backend/.env`
+- persistence works with any PostgreSQL-compatible `DATABASE_URL`, including Supabase
+
+## Repository Map
+
+- API entrypoint: `backend/app/main.py`
+- Core orchestration: `backend/app/service.py`
+- Telephony agent: `backend/agents/telephony_agent.py`
+- Consultation agent: `backend/agents/consultation_agent.py`
+- Outbound caller: `backend/agents/outbound_caller.py`
+- Twilio integration: `backend/app/integrations/twilio_client.py`
+- Resend integration: `backend/app/integrations/resend_onefile.py`
+- SQL schema: `backend/db/schema.sql`
 - Compose stack: `docker-compose.yml`
 
-## Quick Start (Recommended)
+## Quick Start
 
-1. Prepare environment variables:
+1. Create the backend env file.
 
 ```bash
 cp backend/.env.example backend/.env
 ```
 
-Windows PowerShell equivalent:
+Windows PowerShell:
 
 ```powershell
 Copy-Item backend/.env.example backend/.env
 ```
 
-2. Fill required keys in `backend/.env`:
+2. Fill the required provider keys in `backend/.env`.
 
-- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+Required for the voice stack:
+
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
 - `OPENAI_API_KEY`
 - `SPEECHMATICS_API_KEY`
 
-Optional but commonly used:
+Common optional integrations:
 
-- `DATABASE_URL` for persistence
-- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO` for prescription email
-- `TWILIO_*` for SMS confirmation
+- `DATABASE_URL` for PostgreSQL or Supabase persistence
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` for SMS
+- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO` for email delivery
+- `CALCOM_API_KEY`, `CALCOM_EVENT_TYPE_ID` for live booking
+- `SIP_OUTBOUND_TRUNK_ID` for outbound LiveKit SIP calls
 
-3. Start everything:
+3. Start the stack.
 
 ```bash
 docker compose up --build
 ```
 
-Important: use `--build` (double dash), not `-build`.
-
-4. Open:
+4. Open the app.
 
 - Frontend: `http://localhost:8080`
-- Backend health check: `http://localhost:8000/api/health`
+- API health: `http://localhost:8000/api/health`
+
+## Supabase / PostgreSQL
+
+Persistence is optional but recommended for realistic usage.
+
+- Set `DATABASE_URL` to your PostgreSQL or Supabase Postgres connection string
+- apply the schema from `backend/db/schema.sql`
+- for demo data, use `backend/db/supabase_poc_seed.sql`
+
+Additional mock SQL files:
+
+- `backend/db/mock_all_tables_4.sql`
+- `backend/db/mock_4_patients.sql`
+
+## Twilio / Resend / Cal.com / LiveKit
+
+### Twilio
+
+Used for SMS confirmations and reminder messages.
+
+- configure `TWILIO_ACCOUNT_SID`
+- configure `TWILIO_AUTH_TOKEN`
+- configure `TWILIO_FROM_NUMBER`
+- or use `TWILIO_MESSAGING_SERVICE_SID`
+
+### Resend
+
+Used to send prescription emails.
+
+- configure `RESEND_API_KEY`
+- configure `RESEND_FROM_EMAIL`
+- optionally set `RESEND_REPLY_TO`
+- optionally force delivery to a safe inbox with `RESEND_TO`
+
+### Cal.com
+
+Used for booking and availability lookup.
+
+- configure `CALCOM_API_KEY`
+- configure `CALCOM_EVENT_TYPE_ID`
+- optionally set `CALCOM_BASE_URL` and `CALCOM_API_VERSION`
+
+### LiveKit
+
+Used for realtime consultation rooms and SIP-based outbound calls.
+
+- configure `LIVEKIT_URL`
+- configure `LIVEKIT_API_KEY`
+- configure `LIVEKIT_API_SECRET`
+- configure `SIP_OUTBOUND_TRUNK_ID` for real outbound phone calls
 
 ## Local Development Without Docker
 
@@ -108,43 +185,18 @@ npm run dev
 - `POST /api/booking/calcom`
 - `GET /api/dashboard/appointments`
 
-## Testing
-
-Backend tests:
-
-```bash
-cd backend
-pytest -q
-```
-
-Frontend tests:
-
-```bash
-cd frontend
-npm test
-```
-
 ## Troubleshooting
 
-### Twilio error: "Mismatch between the 'From' number and the account"
+### Twilio "From number" mismatch
 
-`TWILIO_FROM_NUMBER` must belong to the same `TWILIO_ACCOUNT_SID` account.
+`TWILIO_FROM_NUMBER` must belong to the same Twilio account as `TWILIO_ACCOUNT_SID`.
 
-If you use a Messaging Service, set `TWILIO_MESSAGING_SERVICE_SID` and ensure it is in the same account.
+If you use a Messaging Service, make sure `TWILIO_MESSAGING_SERVICE_SID` belongs to that same account.
 
 ### Resend test mode limitation
 
-With `onboarding@resend.dev` and no verified domain, Resend usually only allows sending to the account owner/verified test recipient.
+With `onboarding@resend.dev` and no verified domain, Resend generally allows only limited test delivery.
 
-### Follow-up warnings in logs
+### Follow-up agent warnings
 
-Warnings like deprecated LiveKit options or first-time VAD model download are non-fatal and do not necessarily indicate API failure.
-
-## Mock Data
-
-SQL mock files are available in:
-
-- `backend/db/mock_all_tables_4.sql`
-- `backend/db/mock_4_patients.sql`
-
-Use them to seed demo records quickly in your database.
+First-time model downloads, deprecated SDK notices, or non-fatal LiveKit warnings do not automatically mean the workflow failed.
